@@ -64,6 +64,7 @@ class TB_3PO: public HemisphereApplet {
     num_steps = 16;
 
     gate_off_tick = 0;
+    slide_timeout_tick = 0;
     cycle_time = 0;
 
     curr_gate_cv = 0;
@@ -80,10 +81,23 @@ class TB_3PO: public HemisphereApplet {
     if (lock_seed < 1) reseed();
     step = 0;
     reset_flag = 1;
+    curr_gate_cv = 0;
+    gate_off_tick = 0;
+    slide_timeout_tick = 0;
   }
 
   void Controller() {
     const uint32_t this_tick = HS::get_tick();
+
+    // Transport Stop Detection: drop gate immediately when clock stops
+    bool is_clock_running = HS::clock_m.IsRunning();
+    if (was_clock_running && !is_clock_running) {
+      curr_gate_cv = 0;
+      gate_off_tick = 0;
+      slide_timeout_tick = 0;
+      Out(1, 0);
+    }
+    was_clock_running = is_clock_running;
 
     if (Clock(1)) {
       Reset();
@@ -133,17 +147,27 @@ class TB_3PO: public HemisphereApplet {
 
         uint32_t gate_time = (cycle_time / 2); // multiplier of 2
         gate_off_tick = this_tick + gate_time;
+        slide_timeout_tick = this_tick + cycle_time + (cycle_time / 2);
       }
 
       curr_step_semitone = get_semitone_for_step(step);
       reset_flag = 0;
     }
 
-    if (curr_gate_cv > 0 && gate_off_tick > 0 && this_tick >= gate_off_tick) {
-      gate_off_tick = 0;
+    if (curr_gate_cv > 0) {
+      if (gate_off_tick > 0 && this_tick >= gate_off_tick) {
+        gate_off_tick = 0;
 
-      if (!step_is_slid(step)) {
+        if (!step_is_slid(step)) {
+          curr_gate_cv = 0;
+        }
+      }
+
+      // If a slide step held gate high, but clock stopped (no clock for > 1.5 cycles),
+      // kill gate so it never hangs indefinitely
+      if (step_is_slid(step) && slide_timeout_tick > 0 && this_tick >= slide_timeout_tick) {
         curr_gate_cv = 0;
+        slide_timeout_tick = 0;
       }
     }
 
@@ -347,6 +371,7 @@ private:
   bool reset_flag = 0; // prevent stepping forward after a reset
 
   int32_t transpose_amt; // in semitones or scale degrees
+  bool was_clock_running = false;
 
   // Generated sequence data
   uint32_t gates = 0; // Bitfield of gates;  ((gates >> step) & 1) means gate
@@ -362,6 +387,7 @@ private:
 
   // For gate timing as ~32nd notes at tempo, detect clock rate like a clock multiplier
   uint32_t gate_off_tick; // Scheduled cycle at which the gate should be turned off (when applicable)
+  uint32_t slide_timeout_tick = 0;
   uint32_t cycle_time; // Cycle time between the last two clock inputs
 
   // CV output values

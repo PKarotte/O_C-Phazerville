@@ -334,6 +334,30 @@ public:
 #else
             usbMIDI.sendRealTime(usbMIDI.Stop);
 #endif
+            // Broadcast All Notes Off (CC 123) and All Sound Off (CC 120) across all channels
+            for (uint8_t ch = 1; ch <= 16; ++ch) {
+#ifdef ARDUINO_TEENSY41
+                if (~midi_msgtx_disable & mMaskUSBDev) {
+                    usbMIDI.sendControlChange(123, 0, ch);
+                    usbMIDI.sendControlChange(120, 0, ch);
+                }
+                if (~midi_msgtx_disable & mMaskUSBHost) {
+                    usbHostMIDI[0].sendControlChange(123, 0, ch);
+                    usbHostMIDI[0].sendControlChange(120, 0, ch);
+                }
+                if (~midi_msgtx_disable & mMaskUSBHost2) {
+                    usbHostMIDI[1].sendControlChange(123, 0, ch);
+                    usbHostMIDI[1].sendControlChange(120, 0, ch);
+                }
+                if (~midi_msgtx_disable & mMaskSerial) {
+                    MIDI1.sendControlChange(123, 0, ch);
+                    MIDI1.sendControlChange(120, 0, ch);
+                }
+#else
+                usbMIDI.sendControlChange(123, 0, ch);
+                usbMIDI.sendControlChange(120, 0, ch);
+#endif
+            }
         }
         EnableMIDIOut();
     }

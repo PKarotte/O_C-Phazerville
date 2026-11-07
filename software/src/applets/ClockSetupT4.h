@@ -101,6 +101,7 @@ public:
         if (play_trig.Clock()) {
           if (HS::clock_m.IsRunning()) {
             HS::clock_m.Stop();
+            frame.MIDIState.SendAllNotesOff();
           } else {
             HS::clock_m.Start();
           }
@@ -124,6 +125,7 @@ public:
         if (frame.MIDIState.stop_q) {
             frame.MIDIState.stop_q = 0;
             HS::clock_m.Stop();
+            frame.MIDIState.SendAllNotesOff();
             HS::clock_m.EnableMIDIOut();
             HS::PokePopup(HS::CLOCK_POPUP);
         }
@@ -407,6 +409,7 @@ private:
     void PlayStop() {
         if (HS::clock_m.IsRunning()) {
             HS::clock_m.Stop();
+            frame.MIDIState.SendAllNotesOff();
         } else {
             bool p = HS::clock_m.IsPaused();
             HS::clock_m.Start( !p ); // stop->pause->start

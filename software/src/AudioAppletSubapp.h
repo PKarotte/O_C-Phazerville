@@ -117,6 +117,17 @@ public:
     }
   }
 
+  void OnMIDIMessage(uint8_t channel, uint8_t message, uint8_t data1, uint8_t data2) {
+    for (size_t i = 0; i < Slots; i++) {
+      if (IsStereo(i)) {
+        get_selected_stereo_applet(i).OnMIDIMessage(channel, message, data1, data2);
+      } else {
+        get_selected_mono_applet(LEFT_HEMISPHERE, i).OnMIDIMessage(channel, message, data1, data2);
+        get_selected_mono_applet(RIGHT_HEMISPHERE, i).OnMIDIMessage(channel, message, data1, data2);
+      }
+    }
+  }
+
   void mainloop() {
     for (size_t slot = 0; slot < Slots; slot++) {
       if (IsStereo(slot)) {
@@ -381,14 +392,17 @@ public:
     AudioConnection& conn = conns[side][slot];
     conn.disconnect();
     if (slot + 1 < Slots && !IsStereo(slot + 1)) {
-      conn.connect(
-        *stream, 0, *get_selected_mono_applet(side, slot + 1).InputStream(), 0
-      );
+      AudioStream* next_stream = get_selected_mono_applet(side, slot + 1).InputStream();
+      if (next_stream) {
+        conn.connect(*stream, 0, *next_stream, 0);
+      }
     } else {
       AudioStream* next_stream = slot + 1 < Slots
         ? get_selected_stereo_applet(slot + 1).InputStream()
         : &OC::AudioIO::OutputStream();
-      conn.connect(*stream, 0, *next_stream, side);
+      if (next_stream) {
+        conn.connect(*stream, 0, *next_stream, side);
+      }
     }
     peak_conns[side][slot + 1].disconnect();
     peak_conns[side][slot + 1].connect(*stream, 0, peaks[side][slot + 1], 0);
@@ -404,12 +418,16 @@ public:
     if (slot + 1 < Slots && !IsStereo(slot + 1)) {
       AudioStream* next_stream
         = get_selected_mono_applet(side, slot + 1).InputStream();
-      conn.connect(*stream, side, *next_stream, 0);
+      if (next_stream) {
+        conn.connect(*stream, side, *next_stream, 0);
+      }
     } else {
       AudioStream* next_stream = slot + 1 < Slots
         ? get_selected_stereo_applet(slot + 1).InputStream()
         : &OC::AudioIO::OutputStream();
-      conn.connect(*stream, side, *next_stream, side);
+      if (next_stream) {
+        conn.connect(*stream, side, *next_stream, side);
+      }
     }
     peak_conns[side][slot + 1].disconnect();
     peak_conns[side][slot + 1].connect(*stream, side, peaks[side][slot + 1], 0);

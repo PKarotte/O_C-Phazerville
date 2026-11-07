@@ -25,7 +25,7 @@ using namespace HS;
 #include "Binary.h"
 #include "BootsNCat.h"
 #include "Brancher.h"
-#include "BugCrack.h"
+//#include "BugCrack.h"
 #include "Burst.h"
 #include "Button.h"
 #include "BitBeat.h"
@@ -72,17 +72,15 @@ using namespace HS;
 #ifdef USB_GAMEPAD
 #include "JoyStyx.h"
 #endif
-#include "DrLoFi.h"
+// #include "DrLoFi.h"
 #include "Logic.h"
 #include "LowerRenz.h"
 #include "Metronome.h"
 #include "MiniArp.h"
 #ifdef __IMXRT1062__
-#include "MidiLoop.h"
+#include "MidiCapture.h"
 #endif
-#ifdef PEWPEWPEW
 #include "MultiScale.h"
-#endif
 #include "Palimpsest.h"
 #include "Panner.h"
 #include "Pigeons.h"
@@ -148,7 +146,7 @@ constexpr Registry reg = Registry<HemisphereApplet, HS::APPLET_SLOTS  // unused 
     , DeclareApplet<BitBeat, 79, CAT_MODULATOR>
     // , DeclareApplet<BootsNCat, 55, CAT_OTHER>
     , DeclareApplet<Brancher, 4, CAT_UTILITY | CAT_CLOCKING>
-    , DeclareApplet<BugCrack, 51, CAT_OTHER>
+    //, DeclareApplet<BugCrack, 51, CAT_OTHER>
     , DeclareApplet<Burst, 31, CAT_CLOCKING>
     , DeclareApplet<Button, 65, CAT_UTILITY>
     , DeclareApplet<Calculate, 12, CAT_UTILITY>
@@ -165,7 +163,7 @@ constexpr Registry reg = Registry<HemisphereApplet, HS::APPLET_SLOTS  // unused 
     // , DeclareApplet<CVSeq, 92, CAT_SEQUENCER>
     , DeclareApplet<DivSeq, 68, CAT_SEQUENCER | CAT_CLOCKING>
     , DeclareApplet<DivSeq10, 80, CAT_SEQUENCER | CAT_CLOCKING>
-    , DeclareApplet<DrLoFi, 16, CAT_OTHER>
+    // , DeclareApplet<DrLoFi, 16, CAT_OTHER>
     , DeclareApplet<DrumMap, 57, CAT_SEQUENCER>
     , DeclareApplet<DualQuant, 9, CAT_QUANTIZER>
     // , DeclareApplet<OffsetQuant, 90, CAT_QUANTIZER>
@@ -190,11 +188,11 @@ constexpr Registry reg = Registry<HemisphereApplet, HS::APPLET_SLOTS  // unused 
     , DeclareApplet<MarkoV, 93, CAT_SEQUENCER>
     , DeclareApplet<MarkovPerc, 94, CAT_OTHER>
     , DeclareApplet<Metronome, 50, CAT_CLOCKING>
-    , DeclareApplet<MidiLoop, 81, CAT_MIDI>
+    , DeclareApplet<MidiCapture, 81, CAT_MIDI>
     //, DeclareApplet<MiniArp, 97, CAT_SEQUENCER | CAT_QUANTIZER>
     , DeclareApplet<hMIDIIn, 150, CAT_MIDI>
     , DeclareApplet<hMIDIOut, 27, CAT_MIDI>
-    // , DeclareApplet<MultiScale, 73, CAT_QUANTIZER>
+    , DeclareApplet<MultiScale, 73, CAT_QUANTIZER>
     , DeclareApplet<Palimpsest, 20, CAT_SEQUENCER>
     , DeclareApplet<Panner, 100, CAT_UTILITY>
     , DeclareApplet<Pigeons, 71, CAT_SEQUENCER>

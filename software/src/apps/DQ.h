@@ -445,7 +445,7 @@ public:
       channel_frequency_in_ticks_ = ticks_;
       ticks_ = 0x0;
       update_asr_ = true;
-      aux_sample_ = ON;
+      aux_sample_ = true;
     }
 
     if (get_scale_seq_mode()) {

@@ -690,7 +690,9 @@ public:
         HS::IOFrame &f = HS::frame;
         int load_slot = -1;
 
-        while (timeout < 60 && device.read()) {
+        timeout = 0;
+        timeout = 0;
+        while (timeout < 250 && device.read()) {
             const uint8_t message = device.getType();
             const uint8_t data1 = device.getData1();
             const uint8_t data2 = device.getData2();
@@ -707,6 +709,16 @@ public:
             }
 
             f.MIDIState.ProcessMIDIMsg({device.getChannel(), message, data1, data2});
+
+            for (int h = 0; h < 2; h++) {
+                int index = my_applet[h];
+                if (index >= 0) {
+                    HemisphereApplet* app = HS::get_applet(index, (HEM_SIDE)h);
+                    if (app) {
+                        app->OnMIDIMessage(device.getChannel(), message, data1, data2);
+                    }
+                }
+            }
         }
         if (load_slot >= 0 && load_slot < HEM_NR_OF_PRESETS) {
             QueuePresetLoad(load_slot);
@@ -717,6 +729,11 @@ public:
         timeout = 0;
         // top-level MIDI-to-CV handling - alters frame outputs
         ProcessMIDI(usbMIDI);
+#ifdef ARDUINO_TEENSY41
+        ProcessMIDI(usbHostMIDI[0]);
+        ProcessMIDI(usbHostMIDI[1]);
+        if (MIDI_Uses_Serial8) ProcessMIDI(MIDI1);
+#endif
     }
 
     void Controller() {

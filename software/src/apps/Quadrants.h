@@ -636,7 +636,8 @@ public:
         const bool clkrx = ~midi_clkrx_disable & thrumask;
         const bool msgrx = ~midi_msgrx_disable & thrumask;
 
-        while (timeout < 60 && device.read()) {
+        timeout = 0;
+        while (timeout < 250 && device.read()) {
           const MIDIMessage msg = {
             device.getChannel(),
             device.getType(),
@@ -665,12 +666,31 @@ public:
 
             case midi::Clock:
             case midi::Start:
-            case midi::Stop:
               if (clkrx) f.MIDIState.ProcessMIDIMsg(msg); // receive it
-                break;
+              break;
+
+            case midi::Stop:
+              if (clkrx) {
+                f.MIDIState.ProcessMIDIMsg(msg);
+                for (int h = 0; h < APPLET_SLOTS; h++) {
+                  if (active_applet[h]) {
+                    active_applet[h]->OnMIDIMessage(msg.channel, msg.message, msg.data1, msg.data2);
+                  }
+                }
+                audio_app.OnMIDIMessage(msg.channel, msg.message, msg.data1, msg.data2);
+              }
+              break;
 
             default:
-              if (msgrx && (msg.message >> 4) != 0xF) f.MIDIState.ProcessMIDIMsg(msg); // receive it
+              if ((msg.message >> 4) != 0xF) {
+                if (msgrx) f.MIDIState.ProcessMIDIMsg(msg); // receive it
+                for (int h = 0; h < APPLET_SLOTS; h++) {
+                  if (active_applet[h]) {
+                    active_applet[h]->OnMIDIMessage(msg.channel, msg.message, msg.data1, msg.data2);
+                  }
+                }
+                audio_app.OnMIDIMessage(msg.channel, msg.message, msg.data1, msg.data2);
+              }
                 break;
           }
 
@@ -686,9 +706,15 @@ public:
         timeout = 0;
         // top-level MIDI-to-CV handling - alters frame outputs
         ProcessMIDI(usbMIDI);
+#ifdef ARDUINO_TEENSY41
         ProcessMIDI(usbHostMIDI[0]);
         ProcessMIDI(usbHostMIDI[1]);
-        ProcessMIDI(MIDI1);
+        if (MIDI_Uses_Serial8) ProcessMIDI(MIDI1);
+#endif
+        HS::MIDIMessage int_msg;
+        while (HS::frame.MIDIState.PopInternalMsg(int_msg)) {
+            audio_app.OnMIDIMessage(int_msg.channel, int_msg.message, int_msg.data1, int_msg.data2);
+        }
 #ifdef USB_GAMEPAD
         ProcessGamepad(joystick);
 #endif

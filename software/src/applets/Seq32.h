@@ -52,6 +52,7 @@ public:
     };
 
    MiniSeq seq;
+    bool was_clock_running = false;
 
     const char* applet_name() { // Maximum 10 characters
         return "Seq32";
@@ -67,6 +68,12 @@ public:
 
     void Controller()
     {
+      bool is_clock_running = HS::clock_m.IsRunning();
+      if (was_clock_running && !is_clock_running) {
+        GateOut(1, false);
+      }
+      was_clock_running = is_clock_running;
+
       if (Clock(1)) {
         if (write_mode) {
           // insert rest

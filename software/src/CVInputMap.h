@@ -11,12 +11,13 @@ struct CVInputMap {
     TYPE_MIDI = (4 << 5),
 
     TYPE_HID = (5 << 5),
-    TYPE_RESERVED0 = (6 << 5),
+    TYPE_DIGITAL_INPUT = (6 << 5),
     TYPE_INTERNAL = (7 << 5), // for noise, LFOs, S&H, etc.
   };
 
-  static constexpr SourceType ordered_types[6] = {
+  static constexpr SourceType ordered_types[7] = {
     TYPE_NONE,
+    TYPE_DIGITAL_INPUT,
     TYPE_ADC,
     TYPE_DAC,
     TYPE_MIDI,
@@ -56,6 +57,8 @@ public:
         return 0;
       case TYPE_NONE:
         return 1;
+      case TYPE_DIGITAL_INPUT:
+        return DIGITAL_INPUT_COUNT;
       case TYPE_ADC:
         // strictly hardware inputs
         return ADC_CHANNEL_COUNT;
@@ -74,6 +77,9 @@ public:
 
   int RawIn() const {
     switch (source_type()) {
+      case TYPE_DIGITAL_INPUT:
+        return (index() < DIGITAL_INPUT_COUNT && frame.gate_high[index()]) ? HEMISPHERE_MAX_CV : 0;
+
       case TYPE_ADC:
         return frame.In(index());
 
@@ -122,7 +128,7 @@ public:
   }
 
   bool ChangeSourceType(int dir) {
-    const int count = sizeof(ordered_types);
+    const int count = sizeof(ordered_types) / sizeof(ordered_types[0]);
     int tidx = 0;
     while (source_type() != ordered_types[tidx] && tidx < count) ++tidx;
     if (tidx >= count) tidx = 0;
@@ -148,6 +154,10 @@ public:
     source = source_type() | uint8_t(sidx);
   }
 
+  void SetGateInput(uint8_t idx) {
+    CONSTRAIN(idx, 0, channel_count(TYPE_DIGITAL_INPUT) - 1);
+    source = TYPE_DIGITAL_INPUT | (idx & 0x1f);
+  }
   void SetMidiMap(uint8_t midx) {
     CONSTRAIN(midx, 0, channel_count(TYPE_MIDI) - 1);
     source = TYPE_MIDI | (midx & 0x1f);
@@ -175,7 +185,7 @@ public:
     if (!source) {
       return " - ";
     }
-    const char type[] = {' ', '-', 'C', '#', 'M', 'G', '?', '?'};
+    const char type[] = {' ', '-', 'C', '#', 'M', 'G', 'T', '?'};
     uint8_t idx = index();
 
     in_label[0] = type[source_type() >> 5];
@@ -185,6 +195,7 @@ public:
         in_label[2] = ' ';
         break;
 
+      case TYPE_DIGITAL_INPUT:
       case TYPE_MIDI:
       case TYPE_HID:
       case TYPE_ADC:
@@ -215,6 +226,10 @@ public:
     switch (source_type()) {
       case TYPE_NONE:
         return PARAM_MAP_ICONS + 0;
+      case TYPE_DIGITAL_INPUT:
+        if (index() < 4)
+          return DIGITAL_INPUT_ICONS + index() * 8;
+        return ZAP_ICON;
       case TYPE_INTERNAL:
         return MOD_ICON;
       case TYPE_MIDI:
@@ -254,6 +269,7 @@ public:
     }
     // enforce constrain for presets saved with v2.0-alpha
     if (source_type() == TYPE_INTERNAL) SetInternal(index());
+    if (source_type() == TYPE_DIGITAL_INPUT) SetGateInput(index());
 
     attenuversion = extract_value<int8_t>(data >> 8);
   }
