@@ -128,3 +128,13 @@ High-density algorithmic stereo reverberation based on Mutable Instruments Cloud
   - `AudioAppletSubapp` routes incoming USB/Host/Serial MIDI and internal messages directly to audio applets via `OnMIDIMessage`.
 - **Memory Overhead Optimization:**
   - Internal MIDI queues were converted to static inline structures, saving over 30 KB of `.bss.dma` memory and ensuring zero dynamic allocation during audio processing.
+
+---
+
+### 8. TB-3PO Pattern Length CV Modulation
+*Files: `software/src/applets/TB3PO.h`, `software/src/HemisphereApplet.h`, `software/src/HemisphereApplet.cpp`, `software/src/apps/Hemisphere.h`, `software/src/apps/Quadrants.h`*
+
+- **Assignable Pattern Length Modulation:** Added assignable `CVInputMap` modulation directly into the double-click config menu underneath `Pitch` and `Gate` as `[ - ] Ptn Lgth`.
+- **Source Selection & Attenuation:** Modulate pattern length using any CV or MIDI source (`C 1`–`C 8`, `M 1`–`M 16`, etc.) with full attenuversion (`-148%` to `+148%`) using the standard 3-click encoder workflow.
+- **Non-Destructive Storage:** The base pattern length (`num_steps`) remains safe and intact in preset data while CV dynamically modulates the effective loop length between 1 and 32 steps in real time.
+- **Main Screen Untouched:** Preserves TB-3PO's single-page main performance interface without extra menu clutter.
