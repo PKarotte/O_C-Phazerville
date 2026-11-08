@@ -5,6 +5,7 @@
 > [!NOTE]
 > You are viewing the **`PKarotte-branch`** custom fork of the Phazerville Suite for Ornament and Crime / ORN8 (Teensy 4.1 & Teensy 4.0).
 > For the complete deep-dive documentation and change logs, see [**`PKAROTTE_BRANCH_INFO.md`**](PKAROTTE_BRANCH_INFO.md).
+> This is my personal project to customizing my performance Eurorack using two O.R.N.8's as the center pieces.
 
 ---
 
