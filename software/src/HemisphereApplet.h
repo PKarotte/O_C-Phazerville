@@ -116,6 +116,7 @@ public:
       graphics.drawBitmap8(96 - (hemisphere & 1)*64, 28, 8, (hemisphere & 1) ? RIGHT_ICON : LEFT_ICON);
     }
     virtual void AuxButton() { CancelEdit(); }
+    virtual CVInputMap* AuxCVInputMap() { return nullptr; }
     virtual void OnMIDINote(uint8_t channel, uint8_t note, uint8_t velocity) { }
     virtual void OnMIDIMessage(uint8_t channel, uint8_t message, uint8_t data1, uint8_t data2) {
         if ((message & 0xF0) == 0x90 && data2 > 0) {

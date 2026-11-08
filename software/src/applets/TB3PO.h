@@ -51,6 +51,8 @@ class TB_3PO: public HemisphereApplet {
     }
     const uint8_t* applet_icon() { return PhzIcons::tb3P0; }
 
+    CVInputMap* AuxCVInputMap() override { return &length_cv; }
+
   void Start() {
     rand_apply_anim = 0;
     curr_step_semitone = 0;
@@ -62,6 +64,10 @@ class TB_3PO: public HemisphereApplet {
     density_encoder_display = 0;
 
     num_steps = 16;
+    eff_num_steps = 16;
+
+    length_cv.Unpack(0); // Disabled by default
+    length_cv.attenuversion = 60; // 100%
 
     gate_off_tick = 0;
     slide_timeout_tick = 0;
@@ -101,6 +107,16 @@ class TB_3PO: public HemisphereApplet {
 
     if (Clock(1)) {
       Reset();
+    }
+
+    eff_num_steps = num_steps;
+    if (length_cv.enabled()) {
+      int cv_inc = length_cv.SemitoneIn();
+      eff_num_steps = constrain(num_steps + cv_inc, 1, 32);
+    }
+
+    if (step >= eff_num_steps) {
+      step = 0;
     }
 
     transpose_amt = SemitoneIn(0);
@@ -285,6 +301,8 @@ class TB_3PO: public HemisphereApplet {
 
     Pack(data, PackLocation { 0, 1 }, lock_seed);
     Pack(data, PackLocation { 1, 1 }, transpose_in_semitones);
+    Pack(data, PackLocation { 2, 8 }, length_cv.Pack() & 0xFF);
+    Pack(data, PackLocation { 10, 1 }, no_slides);
 
     Pack(data, PackLocation { 12, 4 }, density_encoder);
     Pack(data, PackLocation { 16, 16 }, seed);
@@ -295,6 +313,7 @@ class TB_3PO: public HemisphereApplet {
     Pack(data, PackLocation { 48, 4 }, qselect);
 
     Pack(data, PackLocation { 52, 1 }, hold_pitch);
+    Pack(data, PackLocation { 53, 8 }, (length_cv.Pack() >> 8) & 0xFF);
 
     return data;
   }
@@ -302,6 +321,16 @@ class TB_3PO: public HemisphereApplet {
   void OnDataReceive(uint64_t data) {
     lock_seed = Unpack(data, PackLocation { 0, 1 });
     transpose_in_semitones = Unpack(data, PackLocation { 1, 1 });
+
+    uint8_t cv_src = Unpack(data, PackLocation { 2, 8 });
+    int8_t cv_att = (int8_t)Unpack(data, PackLocation { 53, 8 });
+    if (cv_src != 0) {
+      length_cv.Unpack(cv_src | ((uint16_t)(uint8_t)cv_att << 8));
+    } else {
+      length_cv.Unpack(0);
+      length_cv.attenuversion = 60; // 100% default
+    }
+    no_slides = Unpack(data, PackLocation { 10, 1 });
 
     density_encoder = Unpack(data, PackLocation { 12, 4 });
     seed = Unpack(data, PackLocation { 16, 16 });
@@ -334,7 +363,7 @@ protected:
         help[HELP_CV2]      = "Density";
         help[HELP_OUT1]     = "Pitch";
         help[HELP_OUT2]     = "Gate";
-        help[HELP_EXTRA1] = "";
+        help[HELP_EXTRA1] = "Ptn Lgth";
         help[HELP_EXTRA2] = "Glide on the side!";
        //                   "---------------------" <-- Extra text size guide
     }
@@ -365,6 +394,8 @@ private:
   int density_cv; // density value (+-) contributed by CV
   int density_encoder_display; // Countdown of frames to show the encoder's density value (centerpoint)
   uint8_t num_steps; // How many steps of the generated pattern to play before looping
+  uint8_t eff_num_steps = 16; // Effective CV-modulated pattern length
+  CVInputMap length_cv; // Assignable CV modulation for Pattern Length
 
   // Playback
   uint8_t step = 0; // Current sequencer step
@@ -621,7 +652,7 @@ private:
   }
 
   int get_next_step(int step_num) {
-    if (++step_num >= num_steps) {
+    if (++step_num >= eff_num_steps) {
       return 0;
     }
     return step_num; // Advanced by one
@@ -727,7 +758,8 @@ private:
     int display_step = step + 1; // Protocol droids know that humans count from 1
     gfxPrint(1 + pad(10, display_step), 47, display_step); // Pad x enough to hold width steady
     gfxPrint("/");
-    gfxPrint(num_steps);
+    const uint8_t disp_steps = (EditMode() && cursor == LENGTH) ? num_steps : eff_num_steps;
+    gfxPrint(disp_steps);
     if (hold_pitch) {
       gfxPrint(32, 47, "H"); // Indicate hold pitch mode
     }

@@ -85,8 +85,19 @@ void HemisphereApplet::DrawConfigHelp() const {
       graphics.print( help[HELP_OUT1 + ch] );
     }
 
-    graphics.setPrintPos(0, 45);
-    graphics.print( help[HELP_EXTRA1] );
+    CVInputMap* aux_cv = const_cast<HemisphereApplet*>(this)->AuxCVInputMap();
+    if (aux_cv) {
+      int y = 44;
+      graphics.setPrintPos(0, y);
+      graphics.print( aux_cv->InputName() );
+      graphics.invertRect(0, y - 1, 19, 9);
+
+      graphics.setPrintPos(20, y);
+      graphics.print( help[HELP_EXTRA1] );
+    } else {
+      graphics.setPrintPos(0, 45);
+      graphics.print( help[HELP_EXTRA1] );
+    }
     graphics.setPrintPos(0, 55);
     graphics.print( help[HELP_EXTRA2] );
 }

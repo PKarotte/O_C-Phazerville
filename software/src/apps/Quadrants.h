@@ -785,7 +785,7 @@ public:
           graphics.print((mult >= 0) ? "x" : "/");
           graphics.print((mult >= 0) ? mult : 1 - mult);
         }
-        if (zoom_cursor >= 5) {
+        if (zoom_cursor == 5 || zoom_cursor == 6) {
           gfxIcon(x + 18, y + 1, DOWN_ICON, true);
 
           graphics.clearRect(0, y + 10, 127, 20);
@@ -957,7 +957,15 @@ public:
               } else
                 select_mode = zoom_slot;
               break;
-            //// 0=select; 1,2=trigmap; 3,4=cvmap; 5,6=outmode
+            //// 0=select; 1,2=trigmap; 3,4=cvmap; 5,6=outmode; 7=aux_cvmap
+            case 7:
+            {
+              CVInputMap* aux_cv = active_applet[zoom_slot]->AuxCVInputMap();
+              if (aux_cv && CheckEditInputMapPress(zoom_cursor, IndexedInput(7, *aux_cv)))
+                break;
+              isEditing = !isEditing;
+              break;
+            }
             case 3:
             case 4:
               if (CheckEditInputMapPress(
@@ -1133,12 +1141,20 @@ public:
                   else
                     HS::frame.NudgeSlew(zoom_slot*2 + zoom_cursor - 5, increment);
                   break;
+                case 7:
+                {
+                  CVInputMap* aux_cv = active_applet[zoom_slot]->AuxCVInputMap();
+                  if (aux_cv && !EditSelectedInputMap(increment))
+                    aux_cv->ChangeSource(increment);
+                  break;
+                }
                 default:
                   isEditing = false;
                   break;
               }
             } else { // enc moves cursor
-              zoom_cursor = constrain(zoom_cursor + increment, 0, 6);
+              const int max_zoom = active_applet[zoom_slot]->AuxCVInputMap() ? 7 : 6;
+              zoom_cursor = constrain(zoom_cursor + increment, 0, max_zoom);
               ResetCursor();
             }
         } else if (event.mask & (OC::CONTROL_BUTTON_X | OC::CONTROL_BUTTON_Y)) {
