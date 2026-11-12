@@ -737,7 +737,7 @@ struct alignas(32) MIDIFrame {
         UpdateLog({0, message, data1, data2});
     }
 
-    static constexpr uint8_t INTERNAL_MSG_QUEUE_SIZE = 16;
+    static constexpr uint8_t INTERNAL_MSG_QUEUE_SIZE = 32;
     static inline MIDIMessage internal_msg_queue[INTERNAL_MSG_QUEUE_SIZE] = {};
     static inline uint8_t internal_msg_head = 0;
     static inline uint8_t internal_msg_tail = 0;

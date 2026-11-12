@@ -734,6 +734,18 @@ public:
         ProcessMIDI(usbHostMIDI[1]);
         if (MIDI_Uses_Serial8) ProcessMIDI(MIDI1);
 #endif
+        HS::MIDIMessage int_msg;
+        while (HS::frame.MIDIState.PopInternalMsg(int_msg)) {
+            for (int h = 0; h < 2; h++) {
+                int index = my_applet[h];
+                if (index >= 0) {
+                    HemisphereApplet* app = HS::get_applet(index, (HEM_SIDE)h);
+                    if (app) {
+                        app->OnMIDIMessage(int_msg.channel, int_msg.message, int_msg.data1, int_msg.data2);
+                    }
+                }
+            }
+        }
     }
 
     void Controller() {

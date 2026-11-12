@@ -713,6 +713,11 @@ public:
 #endif
         HS::MIDIMessage int_msg;
         while (HS::frame.MIDIState.PopInternalMsg(int_msg)) {
+            for (int h = 0; h < APPLET_SLOTS; h++) {
+                if (active_applet[h]) {
+                    active_applet[h]->OnMIDIMessage(int_msg.channel, int_msg.message, int_msg.data1, int_msg.data2);
+                }
+            }
             audio_app.OnMIDIMessage(int_msg.channel, int_msg.message, int_msg.data1, int_msg.data2);
         }
 #ifdef USB_GAMEPAD
