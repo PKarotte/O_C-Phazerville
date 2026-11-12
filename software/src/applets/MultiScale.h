@@ -66,7 +66,8 @@ public:
         SRC_MIDI = 1,
         SRC_GEN_SCALE = 2,
         SRC_GEN_SEED = 3,
-        SRC_COUNT = 4
+        SRC_SYNC = 4,
+        SRC_COUNT = 5
     };
 
     enum PlayMode : uint8_t {
@@ -77,7 +78,7 @@ public:
         MODE_COUNT = 4
     };
 
-    static constexpr const char* SRC_NAME[SRC_COUNT] = { "Off", "MIDI", "GenScl", "GenSed" };
+    static constexpr const char* SRC_NAME[SRC_COUNT] = { "Off", "MIDI", "GenScl", "GenSed", "Sync" };
 
     // Generative Scale tables
     static constexpr uint8_t GEN_SCALE_COUNT = 6;
@@ -153,6 +154,11 @@ public:
         prev_centroid = 60;
         // Enable Omni reception so MIDI messages reach applets
         frame.MIDIState.any_channel_omni = true;
+        local_sync_version = 0;
+        local_chord_trigger_seq = shared_chord_trigger_seq;
+        if (input_source != SRC_SYNC) {
+            PublishSync(false);
+        }
     }
 
     bool CheckNextScaleClock() {
@@ -164,6 +170,18 @@ public:
             clk = frame.clocked[1];
         }
         return clk;
+    }
+
+    void PublishSync(bool trigger_chord = false) {
+        if (input_source == SRC_SYNC) return;
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            shared_scale_masks[i] = scale_mask[i];
+        }
+        shared_current_scale = current_scale;
+        shared_sync_version++;
+        if (trigger_chord) {
+            shared_chord_trigger_seq++;
+        }
     }
 
     void Controller() {
@@ -183,9 +201,26 @@ public:
 
         was_clock_running = is_clock_running;
 
-        // Cycle scale sequentially on Digital 2 (or normalled TR2) trigger
-        // (Ignored in MIDI Live Mode so incoming playing directly controls the harmony)
-        if (!(input_source == SRC_MIDI && live_mode) && CheckNextScaleClock()) {
+        if (input_source == SRC_SYNC) {
+            // Follower Mode: stay in lockstep with the active Master MultiScale applet
+            if (local_sync_version != shared_sync_version) {
+                local_sync_version = shared_sync_version;
+                for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+                    scale_mask[i] = shared_scale_masks[i];
+                }
+                current_scale = shared_current_scale;
+                scale_page = current_scale;
+                SetMask(scale_mask[current_scale]);
+                if (chord_gate_active && local_chord_trigger_seq == shared_chord_trigger_seq) {
+                    RefreshActiveChord();
+                }
+            }
+            if (local_chord_trigger_seq != shared_chord_trigger_seq) {
+                local_chord_trigger_seq = shared_chord_trigger_seq;
+                TriggerScaleChord();
+            }
+        } else if (!(input_source == SRC_MIDI && live_mode) && CheckNextScaleClock()) {
+            // Master Mode: cycle scale sequentially on Digital 2 (or normalled TR2) trigger
             current_scale = (current_scale + 1) % MS_QUANT_SCALES_COUNT;
             if (current_scale == 0) {
                 if (input_source == SRC_GEN_SCALE && gen_drift > 0) {
@@ -198,6 +233,7 @@ public:
             SetMask(scale_mask[current_scale]);
             // Send the new scale as a chord on the MIDI Out channel
             TriggerScaleChord();
+            PublishSync(true);
         }
 
         // Update MIDI Chord Out timers (Offset -> Strum / Chord -> Gate Length)
@@ -271,6 +307,7 @@ public:
     }
 
     void ToggleBit(const uint8_t bit) {
+        if (input_source == SRC_SYNC) return;
         scale_mask[scale_page] ^= (0x01 << bit); // toggle bit at position
         if (scale_page == 0) {
             seed_mask = scale_mask[0];
@@ -281,6 +318,7 @@ public:
                 RefreshActiveChord();
             }
         }
+        PublishSync(false);
     }
 
     void ResetAllScales() {
@@ -294,6 +332,7 @@ public:
         prog_started = false;
         notes_held = 0;
         SetMask(scale_mask[current_scale]);
+        PublishSync(false);
     }
 
     // ------------------------------------------------------------------
@@ -375,6 +414,7 @@ public:
         }
         SetMask(scale_mask[current_scale]);
         if (chord_gate_active) RefreshActiveChord();
+        PublishSync(false);
     }
 
     void EvolveScaleProgression() {
@@ -508,6 +548,7 @@ public:
         }
         SetMask(scale_mask[current_scale]);
         if (chord_gate_active) RefreshActiveChord();
+        PublishSync(false);
     }
 
     void EvolveSeedProgression() {
@@ -747,6 +788,7 @@ public:
                     SetMask(scale_mask[current_scale]);
                     scale_page = current_scale;
                     TriggerScaleChord();
+                    PublishSync(true);
                 } else {
                     // PROGRESSION RECORDING MODE:
                     if (prog_started) {
@@ -759,6 +801,7 @@ public:
                         TriggerScaleChord();
                     }
                     scale_page = rec_scale;
+                    PublishSync(rec_scale == current_scale);
                 }
             } else {
                 // Subsequent note within active chord gathering window: union into active scale mask
@@ -768,6 +811,7 @@ public:
                     SetMask(scale_mask[current_scale]);
                     scale_page = current_scale;
                     if (chord_gate_active) RefreshActiveChord();
+                    PublishSync(false);
                 } else {
                     scale_mask[rec_scale] |= (0x01 << semitone);
                     if (rec_scale == current_scale) {
@@ -775,6 +819,7 @@ public:
                         if (chord_gate_active) RefreshActiveChord();
                     }
                     scale_page = rec_scale;
+                    PublishSync(false);
                 }
             }
 
@@ -800,6 +845,8 @@ public:
             case SRC_GEN_SEED:
                 return (c == PAGE2_SEED_COLOR || c == PAGE2_GEN_DRIFT || c == PAGE2_SEED_ANCHOR ||
                         c == PAGE2_GEN_NOW || c == PAGE2_SEED_SET);
+            case SRC_SYNC:
+                return false; // Only PAGE2_SRC is needed on Page 2
         }
         return false;
     }
@@ -862,13 +909,18 @@ public:
                 uint8_t prev_src = input_source;
                 input_source = constrain(input_source + direction, 0, SRC_COUNT - 1);
                 if (input_source != prev_src) {
-                    if (input_source == SRC_GEN_SCALE && scale_mask[0] == 0x0001 && scale_mask[1] == 0x0001) {
+                    if (input_source == SRC_SYNC) {
+                        local_sync_version = shared_sync_version - 1;
+                        local_chord_trigger_seq = shared_chord_trigger_seq;
+                    } else if (input_source == SRC_GEN_SCALE && scale_mask[0] == 0x0001 && scale_mask[1] == 0x0001) {
                         GenerateScaleProgression();
                     } else if (input_source == SRC_GEN_SEED) {
                         if (PopCount12(scale_mask[0]) >= 2) seed_mask = scale_mask[0];
                         if (scale_mask[1] == 0x0001 && scale_mask[2] == 0x0001) {
                             GenerateSeedChain();
                         }
+                    } else if (prev_src == SRC_SYNC) {
+                        PublishSync(false);
                     }
                 }
                 break;
@@ -967,7 +1019,7 @@ public:
         Pack(data, PackLocation {48, 5}, midi_channel % 17);
 
         // Pack Input Source, Chord Out & Play Mode into bits 53..63 (11 bits, 0..2047):
-        // 4 * 17 * 4 * 6 = 1632 <= 2047
+        // 5 * 17 * 4 * 6 = 2040 <= 2047
         uint16_t combo = (input_source % SRC_COUNT) +
                          SRC_COUNT * ((midi_out_ch % 17) +
                          17 * ((chord_play_mode % MODE_COUNT) +
@@ -987,7 +1039,7 @@ public:
         if (midi_channel > 16) midi_channel = 0;
 
         uint16_t combo = Unpack(data, PackLocation {53, 11});
-        if (combo < 1632) {
+        if (combo < 2040) {
             input_source = combo % SRC_COUNT;
             combo /= SRC_COUNT;
             midi_out_ch = combo % 17;
@@ -1010,6 +1062,12 @@ public:
         }
         seed_mask = (PopCount12(scale_mask[0]) >= 2) ? scale_mask[0] : 0x0091;
         SetMask(scale_mask[0]);
+        if (input_source == SRC_SYNC) {
+            local_sync_version = 0;
+            local_chord_trigger_seq = shared_chord_trigger_seq;
+        } else {
+            PublishSync(false);
+        }
     }
 
 protected:
@@ -1089,6 +1147,14 @@ private:
     bool     was_clock_running = false;
     uint8_t  last_rx_channel = 0;
 
+    // Cross-instance Sync State
+    uint32_t local_sync_version = 0;
+    uint32_t local_chord_trigger_seq = 0;
+    static inline uint16_t shared_scale_masks[MS_QUANT_SCALES_COUNT] = {0x0001, 0x0001, 0x0001, 0x0001};
+    static inline int8_t   shared_current_scale = 0;
+    static inline uint32_t shared_sync_version = 1;
+    static inline uint32_t shared_chord_trigger_seq = 0;
+
     static constexpr uint32_t CHORD_GAP_MS = 320;          // Pause to finalize chord & advance
     static constexpr uint32_t CHORD_MAX_WINDOW_MS = 600;   // Max chord gathering window
     static constexpr uint32_t CHORD_GATHER_WINDOW_MS = 90; // Max note spread within a single chord
@@ -1132,6 +1198,8 @@ private:
             gfxPrint(43, 15, "GEN");
         } else if (input_source == SRC_GEN_SEED) {
             gfxPrint(41, 15, "SEED");
+        } else if (input_source == SRC_SYNC) {
+            gfxPrint(41, 15, "SYNC");
         } else if (live_mode) {
             gfxPrint(40, 15, "LIVE");
         } else {
@@ -1249,7 +1317,7 @@ private:
             gfxStartCursor(34, 54);
             gfxPrint("[CLR]");
             gfxEndCursor(cursor == PAGE2_RESET_ALL);
-        } else { // SRC_GEN_SEED
+        } else if (input_source == SRC_GEN_SEED) {
             // Row 2: Color / Adventure
             gfxPrint(1, 24, "Col:");
             gfxStartCursor(26, 24);
@@ -1276,6 +1344,11 @@ private:
             gfxStartCursor(34, 54);
             gfxPrint("[SET1]");
             gfxEndCursor(cursor == PAGE2_SEED_SET);
+        } else { // SRC_SYNC
+            gfxPrint(1, 27, "Follower");
+            gfxPrint(1, 38, "Syncing to");
+            gfxPrint(1, 49, "Master S");
+            gfxPrint(current_scale + 1);
         }
     }
 
