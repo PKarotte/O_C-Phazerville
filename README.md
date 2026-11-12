@@ -138,7 +138,34 @@ High-density algorithmic stereo reverberation based on Mutable Instruments Cloud
 
 ---
 
-### 8. ⚙️ System-Wide MIDI, Clock & Core Infrastructure Fixes
+### 8. 🧹 Streamlined Audio Rack & Memory Optimization (What Was Removed)
+
+In official upstream `main-dev`, dozens of experimental, placeholder, or toy audio applets were statically allocated in memory simultaneously. This completely choked Teensy 4.1's internal RAM2 (AXI SRAM), causing linker overflow crashes and making polyphonic synthesis impossible.
+
+To make room for **5-voice Braids**, the **Brickwall Limiter**, and **Cloudverb** while maintaining **240 KB of clean RAM2 headroom**, the audio rack was intentionally streamlined:
+
+#### Removed / Replaced Audio Applets:
+* **Redundant Oscillators:** `OscApplet`, `HandSawApplet`, `HarmOscApplet`, `FMDrumApplet`, `WTVCOApplet` (all completely superseded by Braids' 39 macro oscillator engines).
+* **Experimental / Toy FX:** `Abyss`, `Animorf`, `DelayApplet`, `FilterFolder`, `DynamicsApplet`, `PhazerApplet`, `Samverb/Bungverb`, `ThreeBandz`, `TuneTracker`, `Glitch`, `Grit`, `AdvKrpsStrng`, `ModalResonator`, `WavRecorder`, `Upsampled`, `Crosspan`, `MidSide`.
+* **Legacy Voice Engine:** The older 2-voice prototype `VoiceApplet` was removed in favor of `BraidsVoiceApplet`.
+
+#### Removed CV Applets:
+* `BugCrack` and `DrLoFi` were removed from the CV menu to free up applet slots.
+* `MidiLoop` was replaced by the significantly more powerful retrospective `MidiCapture` (aliased for backwards compatibility).
+
+#### Active Curated Audio Rack:
+1. **`Braids`** — 5-Voice Polyphonic Synthesizer (39 macro models)
+2. **`Limiter`** — Zero-Overshoot Lookahead Brickwall Limiter
+3. **`Cloudverb`** — High-density stereo algorithmic reverb
+4. **`WavPlayer`** — Enhanced beat-synchronized WAV player with sub-beat rolls & loop points
+5. **`Ladder`** — Resonant 4-pole lowpass ladder filter
+6. **`Input` & `Passthru`** — High-fidelity stereo routing utilities
+
+**Result:** A clean, uncluttered live performance menu, rock-solid audio stability with zero buffer stuttering, and **240 KB of free headroom** in high-speed RAM2.
+
+---
+
+### 9. ⚙️ System-Wide MIDI, Clock & Core Infrastructure Fixes
 
 - **Fixed MIDI Channel UI Freeze (`E0` Bug):**
   - Incoming MIDI streams (pitch bend `0xE0`, clock, CC 16 from sequencers like Behringer Steps) previously overwrote the `M:` parameter display with note names and locked the encoder.
