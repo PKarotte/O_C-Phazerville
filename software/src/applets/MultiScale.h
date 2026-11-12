@@ -57,10 +57,11 @@ public:
         // Page 3: MIDI Chord Out Settings
         PAGE3_MIDI_OUT_CH = 28,
         PAGE3_GATE_LEN = 29,
-        PAGE3_GATE_OFS = 30,
-        PAGE3_PLAY_MODE = 31,
-        PAGE3_OCTAVE = 32,
-        PAGE3_INVERSION = 33,
+        PAGE3_GATE_PCT = 30,
+        PAGE3_GATE_OFS = 31,
+        PAGE3_PLAY_MODE = 32,
+        PAGE3_OCTAVE = 33,
+        PAGE3_INVERSION = 34,
 
         CURSOR_LAST = PAGE3_INVERSION
     };
@@ -106,10 +107,13 @@ public:
     static constexpr uint8_t SEED_RARITY_COUNT = 4;
     static constexpr const char* SEED_RARITY_NAME[SEED_RARITY_COUNT] = { "Hits", "Mid", "Deep", "Rare" };
 
-    // Gate lengths in 32nds of a bar. 0 = 1/1 = hold for as long as the scale is active
-    static constexpr uint8_t GATE_LEN_COUNT = 6;
-    static constexpr uint8_t GATE_LEN_32[GATE_LEN_COUNT] = { 0, 16, 8, 4, 2, 1 };
-    static constexpr const char* GATE_LEN_NAME[GATE_LEN_COUNT] = { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" };
+    // Gate lengths as bar fractions (0 = Hold while scale is active)
+    static constexpr uint8_t GATE_LEN_COUNT = 14;
+    static constexpr uint8_t GATE_LEN_NUM[GATE_LEN_COUNT] = { 0, 1, 7, 3, 2, 1, 3, 1, 1, 3, 1, 1, 1, 1 };
+    static constexpr uint8_t GATE_LEN_DEN[GATE_LEN_COUNT] = { 1, 1, 8, 4, 3, 2, 8, 3, 4, 16, 8, 12, 16, 32 };
+    static constexpr const char* GATE_LEN_NAME[GATE_LEN_COUNT] = {
+        "Hold", "1/1", "7/8", "3/4", "2/3", "1/2", "3/8", "1/3", "1/4", "3/16", "1/8", "1/12", "1/16", "1/32"
+    };
 
     // Gate start offsets in 32nds of a bar
     static constexpr uint8_t GATE_OFS_COUNT = 5;
@@ -782,12 +786,17 @@ public:
         if (active_chord_count == 0) return;
 
         uint32_t tpb = HS::clock_m.GetTempoTicks(); // ticks per quarter note
+        uint32_t bar_ticks = tpb * 4;
+        if (bar_ticks == 0) bar_ticks = 4;
         uint32_t unit = tpb / 8;                     // ticks per 1/32 bar (4/4)
         if (unit == 0) unit = 1;
 
         chord_ofs_ticks = GATE_OFS_32[chord_ofs_idx] * unit;
-        chord_hold_full_scale = (GATE_LEN_32[chord_len_idx] == 0);
-        chord_off_ticks = chord_ofs_ticks + GATE_LEN_32[chord_len_idx] * unit;
+        chord_hold_full_scale = (GATE_LEN_NUM[chord_len_idx] == 0);
+        uint32_t len_ticks = (bar_ticks * GATE_LEN_NUM[chord_len_idx]) / GATE_LEN_DEN[chord_len_idx];
+        len_ticks = (len_ticks * chord_gate_pct) / 100;
+        if (len_ticks == 0) len_ticks = 1;
+        chord_off_ticks = chord_ofs_ticks + len_ticks;
         strum_ticks = tpb / 16; // 1/64 note between strummed notes
         if (strum_ticks == 0) strum_ticks = 1;
 
@@ -1076,6 +1085,9 @@ public:
             case PAGE3_GATE_LEN:
                 chord_len_idx = constrain(chord_len_idx + direction, 0, GATE_LEN_COUNT - 1);
                 break;
+            case PAGE3_GATE_PCT:
+                chord_gate_pct = constrain(chord_gate_pct + direction * 5, 10, 100);
+                break;
             case PAGE3_GATE_OFS:
                 chord_ofs_idx = constrain(chord_ofs_idx + direction, 0, GATE_OFS_COUNT - 1);
                 break;
@@ -1122,10 +1134,15 @@ public:
 
         // Pack Input Source, Chord Out & Play Mode into bits 53..63 (11 bits, 0..2047):
         // 5 * 17 * 4 * 6 = 2040 <= 2047
+        static constexpr uint8_t LEGACY_LEN_MAP[6] = { 0, 5, 8, 10, 12, 13 };
+        uint8_t packed_len = 0;
+        for (uint8_t k = 0; k < 6; k++) {
+            if (chord_len_idx >= LEGACY_LEN_MAP[k]) packed_len = k;
+        }
         uint16_t combo = (input_source % SRC_COUNT) +
                          SRC_COUNT * ((midi_out_ch % 17) +
                          17 * ((chord_play_mode % MODE_COUNT) +
-                         MODE_COUNT * (chord_len_idx % GATE_LEN_COUNT)));
+                         MODE_COUNT * packed_len));
         Pack(data, PackLocation {53, 11}, combo);
         return data;
     }
@@ -1140,6 +1157,7 @@ public:
         midi_channel = Unpack(data, PackLocation {48, 5});
         if (midi_channel > 16) midi_channel = 0;
 
+        static constexpr uint8_t LEGACY_LEN_MAP[6] = { 0, 5, 8, 10, 12, 13 };
         uint16_t combo = Unpack(data, PackLocation {53, 11});
         if (combo < 2040) {
             input_source = combo % SRC_COUNT;
@@ -1148,13 +1166,14 @@ public:
             combo /= 17;
             chord_play_mode = combo % MODE_COUNT;
             combo /= MODE_COUNT;
-            chord_len_idx = combo % GATE_LEN_COUNT;
+            chord_len_idx = LEGACY_LEN_MAP[combo % 6];
         } else {
             input_source = SRC_MIDI;
             midi_out_ch = 0;
             chord_play_mode = MODE_CHORD;
             chord_len_idx = 0;
         }
+        chord_gate_pct = 100;
         chord_ofs_idx = 0;
         live_mode = false;
 
@@ -1214,7 +1233,8 @@ private:
 
     // MIDI Chord Out settings
     uint8_t midi_out_ch = 0;     // 0 = Off, 1..16
-    uint8_t chord_len_idx = 0;   // index into GATE_LEN_32 (0 = 1/1 hold)
+    uint8_t chord_len_idx = 0;   // index into GATE_LEN_* (0 = Hold)
+    uint8_t chord_gate_pct = 100; // 10..100% gate percentage
     uint8_t chord_ofs_idx = 0;   // index into GATE_OFS_32
     uint8_t chord_play_mode = MODE_CHORD;
     int8_t  chord_octave = 3;    // 3 -> chord root at C3 (MIDI 48)
@@ -1489,11 +1509,15 @@ private:
         else graphics.printf("%2d", midi_out_ch);
         gfxEndCursor(cursor == PAGE3_MIDI_OUT_CH);
 
-        // Row 2: Gate length (bar divisions; 1/1 = hold while scale is active)
-        gfxPrint(1, 25, "Len:");
-        gfxStartCursor(26, 25);
+        // Row 2: Gate length (bar fractions) + Gate %
+        gfxPrint(1, 25, "L:");
+        gfxStartCursor(13, 25);
         graphics.print(GATE_LEN_NAME[chord_len_idx]);
         gfxEndCursor(cursor == PAGE3_GATE_LEN);
+
+        gfxStartCursor(39, 25);
+        graphics.printf("%3d%%", chord_gate_pct);
+        gfxEndCursor(cursor == PAGE3_GATE_PCT);
 
         // Row 3: Gate start offset (bar divisions)
         gfxPrint(1, 35, "Ofs:");
