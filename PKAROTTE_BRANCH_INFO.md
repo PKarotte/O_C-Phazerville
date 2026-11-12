@@ -4,6 +4,14 @@ This branch (**`PKarotte-branch`**) introduces major enhancements, new audio syn
 
 ---
 
+> [!IMPORTANT]
+> **Teensy 4.1 Requirement for Audio Applets (Braids, Limiter, Cloudverb):**
+> - The audio synthesis and effect applets (**Braids**, **Brickwall Limiter**, and **Cloudverb**) run exclusively inside Phazerville's digital **Audio Rack**, which **strictly requires Teensy 4.1 hardware (`T41_audio`)** (such as ORN8 or Teensy 4.1 builds).
+> - **Teensy 4.0 (`T40`) does NOT support Braids or audio applets.** Teensy 4.0 operates in CV/Gate mode only.
+> - Teensy 4.0 users flashing this branch still receive all the non-audio CV/MIDI enhancements (the overhauled **MultiScale** with live chord detection, **TB-3PO** pattern length CV mod, **MidiCapture**, and MIDI timing/panic fixes).
+
+---
+
 ## 📦 Compiled Firmware Binaries (.hex)
 
 For Teensy 4.1 users who want ready-to-flash binaries without compiling locally:
@@ -22,7 +30,7 @@ For Teensy 4.1 users who want ready-to-flash binaries without compiling locally:
 
 ## 🚀 Key Features & Changes vs Official `main-dev`
 
-### 1. Full 5-Voice Braids Polyphonic Synthesizer (`Braids`)
+### 1. Full 5-Voice Braids Polyphonic Synthesizer (`Braids`) [Teensy 4.1 ONLY]
 *Files: `software/src/audio_applets/BraidsVoiceApplet.h`, `software/src/braids/*`*
 
 Integrates the full sound palette of Mutable Instruments Braids as a native 5-voice polyphonic audio applet:
@@ -38,32 +46,39 @@ Integrates the full sound palette of Mutable Instruments Braids as a native 5-vo
 
 ---
 
-### 2. MultiScale Applet Overhaul — Interactive & MIDI Chord Learning
+### 2. MultiScale Applet Overhaul — Interactive, Live Chords & MIDI Chord Out
 *File: `software/src/applets/MultiScale.h`*
 
-Completely revamps the `MultiScale` quantizer from a basic CV-switched quantizer into an interactive 2-page scale workstation with live chord capture:
+Completely revamps the `MultiScale` quantizer from a basic CV-switched quantizer into an interactive 3-page harmonic workstation with live chord detection and polyphonic MIDI output:
 - **Page 1 (Interactive Keyboard Visualizer):**
   - Full white and black piano key graphic display.
-  - Simultaneous visual indicators for active Playing scale, Editing scale, and Recording scale.
+  - Simultaneous visual indicators for active Playing scale, Editing scale, and Recording scale / `LIVE` status.
   - Interactive cursor navigation to quickly toggle scale degrees on/off.
-- **Page 2 (MIDI Settings & Management):**
+- **Page 2 (MIDI In Settings & Live Harmonic Follower):**
   - MIDI Channel assignment (`Omni`, `1`..`16`).
   - Target Recording Scale selector (`1`..`4`) with mini-keyboard preview showing the active mask.
-  - `[RESET ALL]` button to instantly clear custom scales back to root.
+  - **Live Harmonic Follower Mode (`Live: ON/OFF`):** Detects incoming MIDI chords in real time and immediately updates the active quantizer scale. Keeps the last played chord held indefinitely until the next chord is played. While Live mode is ON, Digital 2 scale cycling is ignored so your live keyboard playing acts as the harmonic master.
+  - `[CLR]` button to instantly clear custom scales back to root.
+- **Page 3 (MIDI Chord Out & Strumming Engine):**
+  - Polyphonic MIDI Out channel (`Off`, `1`..`16`) with internal routing directly into synthesizer applets (e.g. Braids).
+  - **Gate Length:** Tempo-synced duration in bar fractions (`1/1` hold for the entire scale duration, `1/2`, `1/4`, `1/8`, `1/16`, `1/32`).
+  - **Gate Offset:** Delayed start timing (`0`, `1/16`, `1/8`, `1/4`, `1/2` bar).
+  - **Play Modes:** `Chord` (all voices struck simultaneously) or `Strum` (notes articulated sequentially from low to high).
+  - **Voicing Controls:** Octave selection (`0`–`8`) and Inversions (`-6` to `+6`).
 - **Intelligent MIDI Chord & Progression Capture:**
   - Play chords or melodies over MIDI (keyboard, sequencer, or DAW) directly into MultiScale.
   - Built-in musical chord-gathering window (320 ms gap / 600 ms max window) automatically binds held notes into a scale mask.
-  - Automatically advances to the next scale slot (`rec_scale = (rec_scale + 1) % 4`), allowing you to record an entire 4-chord progression on the fly without touching the encoder.
+  - In normal progression mode, automatically advances to the next scale slot (`rec_scale = (rec_scale + 1) % 4`), allowing you to record an entire 4-chord progression on the fly without touching the encoder.
   - Automatic progression timeout (8s of silence resets target back to Scale 1).
   - Activity dot in the upper-left corner confirms incoming MIDI packets.
 - **Sequential Scale Clocking (TR2 / TR4):**
-  - Advance through scales 1–4 sequentially on incoming clock triggers.
+  - Advance through scales 1–4 sequentially on incoming clock triggers (in normal progression mode).
 - **Dual-Hemisphere Lockstep Normalization:**
   - When loaded in the Right Hemisphere without TR4 physically patched, it automatically normals to TR2 (`frame.clocked[1]`), keeping left and right hemispheres perfectly synchronized without external mults.
 - **Dedicated Voice Gate & Trigger Passthrough:**
   - CV2 (GateIn) passes through to Out 2 (GateOut) with calibrated ~5ms trigger pulses on rising edges and sustained gate hysteresis, completely independent of clock tempo.
 - **Transport Stop Protection:**
-  - Instantly silences gate outputs when the master clock stops to prevent hanging notes.
+  - Instantly silences gate outputs and sends MIDI note offs when the master clock stops to prevent hanging notes.
 
 ---
 

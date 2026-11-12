@@ -3,19 +3,25 @@
 [![PlatformIO CI](https://github.com/djphazer/O_C-Phazerville/actions/workflows/firmware.yml/badge.svg)](https://github.com/djphazer/O_C-Phazerville/actions/workflows/firmware.yml)
 
 > [!NOTE]
-> You are viewing the **`PKarotte-branch`** custom fork of the Phazerville Suite for Ornament and Crime / ORN8 (Teensy 4.1 & Teensy 4.0).
+> You are viewing the **`PKarotte-branch`** custom fork of the Phazerville Suite for Ornament and Crime / ORN8.
 > For the complete deep-dive documentation and change logs, see [**`PKAROTTE_BRANCH_INFO.md`**](PKAROTTE_BRANCH_INFO.md).
-> This is my personal project to customizing my performance Eurorack using two O.R.N.8's as the center pieces.
+> This is my personal project customizing my performance Eurorack using two O.R.N.8's as centerpieces.
+
+> [!IMPORTANT]
+> **Hardware Compatibility Note (Teensy 4.1 vs Teensy 4.0):**
+> - **Braids (`BraidsVoiceApplet`), Brickwall Limiter, and Cloudverb require Teensy 4.1 (`T41_audio`)** (e.g., ORN8 or Teensy 4.1 audio builds). They run inside the digital Audio Rack engine.
+> - **Teensy 4.0 (`T40`) does NOT support Braids or audio applets.** Teensy 4.0 runs in CV/Gate mode only.
+> - Teensy 4.0 *does* benefit from all CV/MIDI applet upgrades in this branch: the overhauled **MultiScale** (with live MIDI chord learning), **TB-3PO** pattern length CV mod, **MidiCapture**, and MIDI panic/clock fixes.
 
 ---
 
 ## 🚀 Key Features in This Branch
 
-- 🎹 **5-Voice Polyphonic Braids Synthesizer (`Braids`)**: Integrates the complete sound engine of Mutable Instruments Braids with all 39 macro oscillator models, 5-voice polyphony (Mono, Round-Robin 5, Unison Spread, and extended 9th Chords), dual internal envelopes (Attack + Decay), and MIDI/CV gate selection.
+- 🎹 **5-Voice Polyphonic Braids Synthesizer (`Braids`) [Teensy 4.1 ONLY]**: Integrates the complete sound engine of Mutable Instruments Braids with all 39 macro oscillator models, 5-voice polyphony (Mono, Round-Robin 5, Unison Spread, and extended 9th Chords), dual internal envelopes (Attack + Decay), and MIDI/CV gate selection.
+- 🛡️ **Brickwall Limiter [Teensy 4.1 ONLY]**: Zero-overshoot lookahead master audio limiter to eliminate digital clipping and protect modular outputs from runaway feedback.
+- 🌌 **Cloudverb DSP [Teensy 4.1 ONLY]**: Ambient spatial algorithmic stereo reverb based on Mutable Instruments Clouds.
 - 🎼 **MultiScale Overhaul — Interactive & Live MIDI Chord Learning**: Interactive piano keyboard display for visual editing, plus live MIDI chord/progression recording with automatic chord capture and slot advancement.
 - 🎛️ **TB-3PO Pattern Length CV Modulation**: Added assignable CV modulation for pattern length directly under Pitch and Gate in the double-click config menu, with full attenuversion support and non-destructive base length storage.
-- 🛡️ **Brickwall Limiter**: Zero-latency master audio limiter to eliminate digital clipping and protect modular outputs.
-- 🌌 **Cloudverb DSP**: Ambient spatial reverb available as a native audio applet.
 - ⏱️ **Clock & MIDI Timing Hardening**: Microsecond-precision clocking refactor and MIDI queue overflow protection.
 
 ---
