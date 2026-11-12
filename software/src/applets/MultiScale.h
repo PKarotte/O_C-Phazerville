@@ -30,28 +30,73 @@ public:
         PAGE1_KEY_FIRST = 1,
         PAGE1_KEY_LAST = 12,
 
-        // Page 2: MIDI In Settings & Reset
-        PAGE2_MIDI_CH = 13,
-        PAGE2_REC_SCALE = 14,
-        PAGE2_LIVE = 15,
-        PAGE2_RESET_ALL = 16,
+        // Page 2: Input Source & Dynamic Parameters
+        PAGE2_SRC = 13,
+        // -> MIDI mode
+        PAGE2_MIDI_CH = 14,
+        PAGE2_REC_SCALE = 15,
+        PAGE2_LIVE = 16,
+        // -> Gen: Scale mode
+        PAGE2_GEN_ROOT = 17,
+        PAGE2_GEN_SCALE = 18,
+        PAGE2_GEN_STYLE = 19,
+        // -> Gen: Seed mode
+        PAGE2_SEED_COLOR = 20,
+        PAGE2_SEED_ANCHOR = 21,
+        // -> Shared Gen controls
+        PAGE2_GEN_DRIFT = 22,
+        PAGE2_GEN_NOW = 23,
+        PAGE2_SEED_SET = 24,
+        // -> Shared Clear
+        PAGE2_RESET_ALL = 25,
 
         // Page 3: MIDI Chord Out Settings
-        PAGE3_MIDI_OUT_CH = 17,
-        PAGE3_GATE_LEN = 18,
-        PAGE3_GATE_OFS = 19,
-        PAGE3_PLAY_MODE = 20,
-        PAGE3_OCTAVE = 21,
-        PAGE3_INVERSION = 22,
+        PAGE3_MIDI_OUT_CH = 26,
+        PAGE3_GATE_LEN = 27,
+        PAGE3_GATE_OFS = 28,
+        PAGE3_PLAY_MODE = 29,
+        PAGE3_OCTAVE = 30,
+        PAGE3_INVERSION = 31,
 
         CURSOR_LAST = PAGE3_INVERSION
     };
 
-    enum PlayMode : uint8_t {
-        MODE_CHORD = 0, // all notes at once
-        MODE_STRUM = 1, // notes one after another, low to high
-        MODE_COUNT = 2
+    enum InputSource : uint8_t {
+        SRC_OFF = 0,
+        SRC_MIDI = 1,
+        SRC_GEN_SCALE = 2,
+        SRC_GEN_SEED = 3,
+        SRC_COUNT = 4
     };
+
+    enum PlayMode : uint8_t {
+        MODE_CHORD = 0,    // all notes at once
+        MODE_STRUM = 1,    // notes one after another, low to high
+        MODE_VL_CHORD = 2, // voice-led smooth chord
+        MODE_VL_STRUM = 3, // voice-led smooth strum
+        MODE_COUNT = 4
+    };
+
+    static constexpr const char* SRC_NAME[SRC_COUNT] = { "Off", "MIDI", "GenScl", "GenSed" };
+
+    // Generative Scale tables
+    static constexpr uint8_t GEN_SCALE_COUNT = 6;
+    static constexpr const char* NOTE_NAMES[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    static constexpr const char* GEN_SCALE_NAME[GEN_SCALE_COUNT] = { "Maj", "Min", "Dor", "Phr", "Lyd", "HMn" };
+    static constexpr uint8_t GEN_SCALES[GEN_SCALE_COUNT][7] = {
+        {0, 2, 4, 5, 7, 9, 11}, // Major (Ionian)
+        {0, 2, 3, 5, 7, 8, 10}, // Natural Minor
+        {0, 2, 3, 5, 7, 9, 10}, // Dorian
+        {0, 1, 3, 5, 7, 8, 10}, // Phrygian
+        {0, 2, 4, 6, 7, 9, 11}, // Lydian
+        {0, 2, 3, 5, 7, 8, 11}  // Harmonic Minor
+    };
+
+    static constexpr uint8_t GEN_STYLE_COUNT = 4;
+    static constexpr const char* GEN_STYLE_NAME[GEN_STYLE_COUNT] = { "Diatnc", "Lush7", "Cinma", "Jazzy" };
+
+    static constexpr uint8_t SEED_COLOR_COUNT = 3;
+    static constexpr const char* SEED_COLOR_NAME[SEED_COLOR_COUNT] = { "Pure", "Rich", "Wild" };
 
     // Gate lengths in 32nds of a bar. 0 = 1/1 = hold for as long as the scale is active
     static constexpr uint8_t GATE_LEN_COUNT = 6;
@@ -104,6 +149,8 @@ public:
         strum_active = false;
         active_chord_count = 0;
         for (uint8_t i = 0; i < MAX_CHORD_NOTES; i++) chord_sounding[i] = false;
+        seed_mask = 0x0091; // Default C Major triad seed if Slot 1 is only root
+        prev_centroid = 60;
         // Enable Omni reception so MIDI messages reach applets
         frame.MIDIState.any_channel_omni = true;
     }
@@ -137,9 +184,16 @@ public:
         was_clock_running = is_clock_running;
 
         // Cycle scale sequentially on Digital 2 (or normalled TR2) trigger
-        // (Ignored in Live Mode so incoming playing directly controls the harmony)
-        if (!live_mode && CheckNextScaleClock()) {
+        // (Ignored in MIDI Live Mode so incoming playing directly controls the harmony)
+        if (!(input_source == SRC_MIDI && live_mode) && CheckNextScaleClock()) {
             current_scale = (current_scale + 1) % MS_QUANT_SCALES_COUNT;
+            if (current_scale == 0) {
+                if (input_source == SRC_GEN_SCALE && gen_drift > 0) {
+                    EvolveScaleProgression();
+                } else if (input_source == SRC_GEN_SEED && gen_drift > 0) {
+                    EvolveSeedProgression();
+                }
+            }
             scale_page = current_scale;
             SetMask(scale_mask[current_scale]);
             // Send the new scale as a chord on the MIDI Out channel
@@ -218,6 +272,9 @@ public:
 
     void ToggleBit(const uint8_t bit) {
         scale_mask[scale_page] ^= (0x01 << bit); // toggle bit at position
+        if (scale_page == 0) {
+            seed_mask = scale_mask[0];
+        }
         if (scale_page == current_scale) {
             SetMask(scale_mask[current_scale]);
             if (chord_gate_active) {
@@ -229,7 +286,6 @@ public:
     void ResetAllScales() {
         SendChordNotesOff();
         for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
-            scale_mask[i] = 0;
             scale_mask[i] = 0x0001; // default to root note
         }
         rec_scale = 0;
@@ -238,6 +294,236 @@ public:
         prog_started = false;
         notes_held = 0;
         SetMask(scale_mask[current_scale]);
+    }
+
+    // ------------------------------------------------------------------
+    // Generative Harmonic Engine (Method 1: Scale/Markov, Method 2: Seed)
+    // ------------------------------------------------------------------
+    static uint8_t PopCount12(uint16_t mask) {
+        uint8_t c = 0;
+        for (uint8_t i = 0; i < 12; i++) if ((mask >> i) & 0x01) c++;
+        return c;
+    }
+
+    uint16_t BuildDiatonicChordMask(uint8_t deg, uint8_t style) const {
+        uint16_t m = 0;
+        const uint8_t* sc = GEN_SCALES[gen_scale % GEN_SCALE_COUNT];
+        auto add_deg = [&](uint8_t d) {
+            uint8_t note = (gen_root + sc[d % 7]) % 12;
+            m |= (1 << note);
+        };
+
+        // Base triad (1, 3, 5)
+        add_deg(deg);
+        // Occasionally use sus2 / sus4 in Cinma or Lush7
+        bool use_sus = (style == 1 || style == 2) && (random(100) < 25);
+        if (use_sus) {
+            add_deg(deg + (random(2) ? 1 : 3)); // sus2 or sus4
+        } else {
+            add_deg(deg + 2); // 3rd
+        }
+        add_deg(deg + 4); // 5th
+
+        // Style color extensions
+        if (style == 0) { // Diatnc: mostly triads, rare 7th on V or ii
+            if ((deg == 4 || deg == 1) && random(100) < 35) add_deg(deg + 6);
+        } else if (style == 1) { // Lush7: 7ths & add9s
+            add_deg(deg + 6);
+            if (random(100) < 40) add_deg(deg + 1); // add9
+        } else if (style == 2) { // Cinma: add9 / 7th colors
+            if (random(100) < 55) add_deg(deg + 1);
+            if (random(100) < 30) add_deg(deg + 6);
+        } else { // Jazzy: rich 7ths & 9ths
+            add_deg(deg + 6);
+            if (random(100) < 60) add_deg(deg + 1);
+        }
+        return m;
+    }
+
+    uint8_t NextMarkovDegree(uint8_t deg, uint8_t style) const {
+        // Functional harmony transition table: 4 weighted musical choices per degree
+        static constexpr uint8_t trans[7][4] = {
+            {3, 5, 4, 1}, // I   -> IV, vi, V, ii
+            {4, 3, 0, 5}, // ii  -> V, IV, I, vi
+            {5, 3, 1, 4}, // iii -> vi, IV, ii, V
+            {4, 0, 1, 5}, // IV  -> V, I, ii, vi
+            {0, 5, 3, 2}, // V   -> I, vi, IV, iii
+            {3, 1, 4, 0}, // vi  -> IV, ii, V, I
+            {0, 2, 4, 5}  // vii -> I, iii, V, vi
+        };
+        static constexpr uint8_t cinma_trans[7][4] = {
+            {5, 3, 2, 6}, // i   -> VI, iv, III, VII
+            {4, 5, 6, 0}, // ii  -> v, VI, VII, i
+            {5, 6, 3, 0}, // III -> VI, VII, iv, i
+            {0, 6, 5, 4}, // iv  -> i, VII, VI, v
+            {0, 5, 3, 6}, // v   -> i, VI, iv, VII
+            {6, 3, 2, 0}, // VI  -> VII, iv, III, i
+            {0, 2, 5, 3}  // VII -> i, III, VI, iv
+        };
+        uint8_t pick = random(100);
+        uint8_t idx = (pick < 40) ? 0 : (pick < 70) ? 1 : (pick < 90) ? 2 : 3;
+        return (style == 2) ? cinma_trans[deg % 7][idx] : trans[deg % 7][idx];
+    }
+
+    void GenerateScaleProgression() {
+        gen_deg[0] = 0; // Start on tonic (I / i)
+        for (uint8_t i = 1; i < MS_QUANT_SCALES_COUNT; i++) {
+            gen_deg[i] = NextMarkovDegree(gen_deg[i - 1], gen_style);
+        }
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            scale_mask[i] = BuildDiatonicChordMask(gen_deg[i], gen_style);
+        }
+        SetMask(scale_mask[current_scale]);
+        if (chord_gate_active) RefreshActiveChord();
+    }
+
+    void EvolveScaleProgression() {
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            // Keep Slot 0 anchored on tonic unless Drift >= 70%
+            if (i == 0 && gen_drift < 70) continue;
+            if (random(100) < gen_drift) {
+                uint8_t prev = gen_deg[(i + MS_QUANT_SCALES_COUNT - 1) % MS_QUANT_SCALES_COUNT];
+                if (random(100) < 60) {
+                    gen_deg[i] = NextMarkovDegree(prev, gen_style);
+                }
+                scale_mask[i] = BuildDiatonicChordMask(gen_deg[i], gen_style);
+            }
+        }
+    }
+
+    static bool HasChromaticCluster(uint16_t mask) {
+        for (uint8_t s = 0; s < 12; s++) {
+            uint8_t s1 = (s + 1) % 12;
+            uint8_t s2 = (s + 2) % 12;
+            if (((mask >> s) & 1) && ((mask >> s1) & 1) && ((mask >> s2) & 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    int ScoreChordMask(uint16_t mask, uint8_t color) const {
+        uint8_t tones[12];
+        uint8_t n = 0;
+        for (uint8_t s = 0; s < 12; s++) {
+            if ((mask >> s) & 1) tones[n++] = s;
+        }
+        if (n < 3 || n > 4 || HasChromaticCluster(mask)) return -999;
+
+        int score = 0;
+        uint8_t semitone_pairs = 0;
+        for (uint8_t i = 0; i < n; i++) {
+            for (uint8_t j = i + 1; j < n; j++) {
+                uint8_t d = tones[j] - tones[i];
+                if (d > 6) d = 12 - d;
+                switch (d) {
+                    case 1:
+                        semitone_pairs++;
+                        if (color == 0) score -= 12;      // Pure: avoid minor 2nd/maj7
+                        else if (color == 1) score += (semitone_pairs == 1 ? 2 : -8); // Rich: allow 1 maj7
+                        break;
+                    case 2: score += 3; break;            // sus2 / add9
+                    case 3:
+                    case 4: score += 5; break;            // maj/min 3rds
+                    case 5: score += 6; break;            // 4th / 5th
+                    case 6: score += (color == 0 ? -4 : 1); break; // tritone
+                }
+            }
+        }
+        return score;
+    }
+
+    uint16_t MutateChordMask(uint16_t mask, uint8_t color) const {
+        if (PopCount12(mask) < 3) {
+            // Ensure at least a valid triad
+            uint8_t root = 0;
+            for (uint8_t s = 0; s < 12; s++) if ((mask >> s) & 1) { root = s; break; }
+            mask = (1 << root) | (1 << ((root + 4) % 12)) | (1 << ((root + 7) % 12));
+        }
+
+        uint16_t cands[48];
+        int scores[48];
+        int cand_count = 0;
+        int best_score = -999;
+
+        uint8_t tones[12];
+        uint8_t n = 0;
+        for (uint8_t s = 0; s < 12; s++) if ((mask >> s) & 1) tones[n++] = s;
+
+        auto push_cand = [&](uint16_t c) {
+            if (c == mask || cand_count >= 48) return;
+            int sc = ScoreChordMask(c, color);
+            if (sc > -500) {
+                cands[cand_count] = c;
+                scores[cand_count] = sc;
+                if (sc > best_score) best_score = sc;
+                cand_count++;
+            }
+        };
+
+        // 1. Parsimonious 1-note shifts (+-1 or +-2 semitones)
+        static constexpr int8_t shifts[4] = {-2, -1, 1, 2};
+        for (uint8_t i = 0; i < n; i++) {
+            uint16_t base_without = mask & ~(1 << tones[i]);
+            for (int k = 0; k < 4; k++) {
+                uint8_t nt = (tones[i] + 12 + shifts[k]) % 12;
+                if (!((base_without >> nt) & 1)) {
+                    push_cand(base_without | (1 << nt));
+                }
+            }
+        }
+
+        // 2. Add or drop 4th color tone when Rich/Wild
+        if (color >= 1 && n == 3) {
+            for (uint8_t s = 0; s < 12; s++) {
+                if (!((mask >> s) & 1)) push_cand(mask | (1 << s));
+            }
+        } else if (n == 4) {
+            for (uint8_t i = 0; i < n; i++) {
+                push_cand(mask & ~(1 << tones[i]));
+            }
+        }
+
+        if (cand_count == 0) return mask;
+
+        // Pick randomly among candidates within 3 points of best_score
+        uint16_t top[48];
+        int top_count = 0;
+        int threshold = best_score - (color == 2 ? 5 : 3);
+        for (int i = 0; i < cand_count; i++) {
+            if (scores[i] >= threshold) {
+                top[top_count++] = cands[i];
+            }
+        }
+        return top[random(top_count)];
+    }
+
+    void GenerateSeedChain() {
+        if (PopCount12(seed_mask) < 2) {
+            seed_mask = (PopCount12(scale_mask[0]) >= 2) ? scale_mask[0] : 0x0091;
+        }
+        scale_mask[0] = seed_mask;
+        for (uint8_t i = 1; i < MS_QUANT_SCALES_COUNT; i++) {
+            scale_mask[i] = MutateChordMask(scale_mask[i - 1], seed_color);
+        }
+        SetMask(scale_mask[current_scale]);
+        if (chord_gate_active) RefreshActiveChord();
+    }
+
+    void EvolveSeedProgression() {
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            if (i == 0 && seed_anchor) {
+                scale_mask[0] = seed_mask;
+                continue;
+            }
+            if (random(100) < gen_drift) {
+                uint16_t ref = (i == 0) ? scale_mask[0] : scale_mask[i - 1];
+                scale_mask[i] = MutateChordMask(scale_mask[i], seed_color);
+                if (scale_mask[i] == ref) {
+                    scale_mask[i] = MutateChordMask(ref, seed_color);
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -252,27 +538,66 @@ public:
         HS::frame.MIDIState.QueueInternalMsg({ch, status, note, vel});
     }
 
-    // Build the voiced chord from the active scale mask, octave, and inversion
+    // Build the voiced chord from the active scale mask, octave, and inversion (or Voice Leading)
     void BuildChord() {
         int notes[MAX_CHORD_NOTES];
         int count = 0;
         const int base = 12 * (chord_octave + 1); // octave 3 -> C3 = MIDI 48
         const uint16_t mask = scale_mask[current_scale];
-        for (int s = 0; s < 12; s++) {
-            if ((mask >> s) & 0x01) notes[count++] = base + s;
-        }
+        const bool use_vl = (chord_play_mode == MODE_VL_CHORD || chord_play_mode == MODE_VL_STRUM);
 
-        // Inversions: positive moves the lowest note up an octave, negative moves the highest down
-        if (count > 0) {
-            for (int i = 0; i < chord_inversion; i++) {
-                int low = notes[0] + 12;
-                for (int k = 0; k < count - 1; k++) notes[k] = notes[k + 1];
-                notes[count - 1] = low;
+        if (use_vl) {
+            int center = constrain((int)prev_centroid, base - 4, base + 16) + chord_inversion * 2;
+            for (int s = 0; s < 12; s++) {
+                if ((mask >> s) & 0x01) {
+                    int cand[3] = { base + s - 12, base + s, base + s + 12 };
+                    int best = cand[1];
+                    int best_dist = abs(cand[1] - center);
+                    for (int k = 0; k < 3; k++) {
+                        if (cand[k] >= 12 && cand[k] <= 115) {
+                            int d = abs(cand[k] - center);
+                            if (d < best_dist) {
+                                best_dist = d;
+                                best = cand[k];
+                            }
+                        }
+                    }
+                    notes[count++] = best;
+                }
             }
-            for (int i = 0; i > chord_inversion; i--) {
-                int high = notes[count - 1] - 12;
-                for (int k = count - 1; k > 0; k--) notes[k] = notes[k - 1];
-                notes[0] = high;
+            // Sort ascending for clean strumming & voicing
+            for (int i = 1; i < count; i++) {
+                int key = notes[i];
+                int j = i - 1;
+                while (j >= 0 && notes[j] > key) {
+                    notes[j + 1] = notes[j];
+                    j--;
+                }
+                notes[j + 1] = key;
+            }
+            if (count > 0) {
+                int sum = 0;
+                for (int i = 0; i < count; i++) sum += notes[i];
+                int avg = sum / count;
+                prev_centroid = (int16_t)((avg * 3 + (base + 6)) / 4);
+            }
+        } else {
+            for (int s = 0; s < 12; s++) {
+                if ((mask >> s) & 0x01) notes[count++] = base + s;
+            }
+
+            // Inversions: positive moves the lowest note up an octave, negative moves the highest down
+            if (count > 0) {
+                for (int i = 0; i < chord_inversion; i++) {
+                    int low = notes[0] + 12;
+                    for (int k = 0; k < count - 1; k++) notes[k] = notes[k + 1];
+                    notes[count - 1] = low;
+                }
+                for (int i = 0; i > chord_inversion; i--) {
+                    int high = notes[count - 1] - 12;
+                    for (int k = count - 1; k > 0; k--) notes[k] = notes[k - 1];
+                    notes[0] = high;
+                }
             }
         }
 
@@ -290,7 +615,7 @@ public:
     }
 
     void StartChordNotes() {
-        if (chord_play_mode == MODE_CHORD) {
+        if (chord_play_mode == MODE_CHORD || chord_play_mode == MODE_VL_CHORD) {
             for (uint8_t i = 0; i < active_chord_count; i++) PlayChordNote(i);
             strum_active = false;
         } else {
@@ -375,6 +700,8 @@ public:
     }
 
     void OnMIDIMessage(uint8_t channel, uint8_t message, uint8_t data1, uint8_t data2) override {
+        if (input_source != SRC_MIDI) return;
+
         // Record channel of incoming traffic & reset activity timer
         last_rx_channel = channel;
         midi_activity_timer = millis();
@@ -459,8 +786,26 @@ public:
         }
     }
 
+    bool IsCursorVisible(int8_t c) const {
+        if (c <= PAGE1_KEY_LAST || c >= PAGE3_MIDI_OUT_CH) return true;
+        if (c == PAGE2_SRC) return true;
+        switch (input_source) {
+            case SRC_OFF:
+                return (c == PAGE2_RESET_ALL);
+            case SRC_MIDI:
+                return (c == PAGE2_MIDI_CH || c == PAGE2_REC_SCALE || c == PAGE2_LIVE || c == PAGE2_RESET_ALL);
+            case SRC_GEN_SCALE:
+                return (c == PAGE2_GEN_ROOT || c == PAGE2_GEN_SCALE || c == PAGE2_GEN_STYLE ||
+                        c == PAGE2_GEN_DRIFT || c == PAGE2_GEN_NOW || c == PAGE2_RESET_ALL);
+            case SRC_GEN_SEED:
+                return (c == PAGE2_SEED_COLOR || c == PAGE2_GEN_DRIFT || c == PAGE2_SEED_ANCHOR ||
+                        c == PAGE2_GEN_NOW || c == PAGE2_SEED_SET);
+        }
+        return false;
+    }
+
     void View() {
-        if (cursor < PAGE2_MIDI_CH) {
+        if (cursor < PAGE2_SRC) {
             DrawPage1();
         } else if (cursor < PAGE3_MIDI_OUT_CH) {
             DrawPage2();
@@ -478,6 +823,14 @@ public:
         } else if (cursor == PAGE2_LIVE) {
             live_mode = !live_mode;
             if (live_mode) SetMask(scale_mask[current_scale]);
+        } else if (cursor == PAGE2_SEED_ANCHOR) {
+            seed_anchor = !seed_anchor;
+        } else if (cursor == PAGE2_GEN_NOW) {
+            if (input_source == SRC_GEN_SCALE) GenerateScaleProgression();
+            else if (input_source == SRC_GEN_SEED) GenerateSeedChain();
+        } else if (cursor == PAGE2_SEED_SET) {
+            seed_mask = scale_mask[0];
+            GenerateSeedChain();
         } else if (cursor == PAGE2_RESET_ALL) {
             ResetAllScales();
         } else {
@@ -487,7 +840,17 @@ public:
 
     void OnEncoderMove(int direction) {
         if (!EditMode()) {
-            MoveCursor(cursor, direction, CURSOR_LAST);
+            int next = cursor + direction;
+            if (next < 0) next = CURSOR_LAST;
+            if (next > CURSOR_LAST) next = 0;
+            int guard = 0;
+            while (!IsCursorVisible(next) && guard++ <= CURSOR_LAST) {
+                next += (direction >= 0 ? 1 : -1);
+                if (next < 0) next = CURSOR_LAST;
+                if (next > CURSOR_LAST) next = 0;
+            }
+            cursor = next;
+            ResetCursor();
             return;
         }
 
@@ -495,6 +858,21 @@ public:
             case PAGE1_SCALE_SELECT:
                 scale_page = constrain(scale_page + direction, 0, MS_QUANT_SCALES_COUNT - 1);
                 break;
+            case PAGE2_SRC: {
+                uint8_t prev_src = input_source;
+                input_source = constrain(input_source + direction, 0, SRC_COUNT - 1);
+                if (input_source != prev_src) {
+                    if (input_source == SRC_GEN_SCALE && scale_mask[0] == 0x0001 && scale_mask[1] == 0x0001) {
+                        GenerateScaleProgression();
+                    } else if (input_source == SRC_GEN_SEED) {
+                        if (PopCount12(scale_mask[0]) >= 2) seed_mask = scale_mask[0];
+                        if (scale_mask[1] == 0x0001 && scale_mask[2] == 0x0001) {
+                            GenerateSeedChain();
+                        }
+                    }
+                }
+                break;
+            }
             case PAGE2_MIDI_CH:
                 midi_channel = constrain(midi_channel + direction, 0, 16);
                 break;
@@ -510,6 +888,28 @@ public:
                     live_mode = !live_mode;
                     if (live_mode) SetMask(scale_mask[current_scale]);
                 }
+                break;
+            case PAGE2_GEN_ROOT:
+                gen_root = (gen_root + 12 + direction) % 12;
+                GenerateScaleProgression();
+                break;
+            case PAGE2_GEN_SCALE:
+                gen_scale = constrain(gen_scale + direction, 0, GEN_SCALE_COUNT - 1);
+                GenerateScaleProgression();
+                break;
+            case PAGE2_GEN_STYLE:
+                gen_style = constrain(gen_style + direction, 0, GEN_STYLE_COUNT - 1);
+                GenerateScaleProgression();
+                break;
+            case PAGE2_SEED_COLOR:
+                seed_color = constrain(seed_color + direction, 0, SEED_COLOR_COUNT - 1);
+                GenerateSeedChain();
+                break;
+            case PAGE2_SEED_ANCHOR:
+                if (direction != 0) seed_anchor = !seed_anchor;
+                break;
+            case PAGE2_GEN_DRIFT:
+                gen_drift = constrain(gen_drift + direction * 10, 0, 100);
                 break;
             case PAGE3_MIDI_OUT_CH: {
                 uint8_t new_ch = constrain(midi_out_ch + direction, 0, 16);
@@ -546,8 +946,8 @@ public:
             CancelEdit();
             return;
         }
-        if (cursor < PAGE2_MIDI_CH) {
-            cursor = PAGE2_MIDI_CH;
+        if (cursor < PAGE2_SRC) {
+            cursor = PAGE2_SRC;
         } else if (cursor < PAGE3_MIDI_OUT_CH) {
             cursor = PAGE3_MIDI_OUT_CH;
         } else {
@@ -566,13 +966,12 @@ public:
         // Retain exact 5-bit MIDI In channel at {48, 5} for full backwards compatibility
         Pack(data, PackLocation {48, 5}, midi_channel % 17);
 
-        // Pack Chord Out & Live mode into bits 53..63 (11 bits, 0..2047):
-        // 17 * 2 * 2 * 6 * 5 = 2040 <= 2047
-        uint16_t combo = (midi_out_ch % 17) + 
-                         17 * ((live_mode ? 1 : 0) + 
-                         2 * ((chord_play_mode % MODE_COUNT) + 
-                         MODE_COUNT * ((chord_len_idx % GATE_LEN_COUNT) + 
-                         GATE_LEN_COUNT * (chord_ofs_idx % GATE_OFS_COUNT))));
+        // Pack Input Source, Chord Out & Play Mode into bits 53..63 (11 bits, 0..2047):
+        // 4 * 17 * 4 * 6 = 1632 <= 2047
+        uint16_t combo = (input_source % SRC_COUNT) +
+                         SRC_COUNT * ((midi_out_ch % 17) +
+                         17 * ((chord_play_mode % MODE_COUNT) +
+                         MODE_COUNT * (chord_len_idx % GATE_LEN_COUNT)));
         Pack(data, PackLocation {53, 11}, combo);
         return data;
     }
@@ -588,29 +987,28 @@ public:
         if (midi_channel > 16) midi_channel = 0;
 
         uint16_t combo = Unpack(data, PackLocation {53, 11});
-        if (combo < 2040) {
+        if (combo < 1632) {
+            input_source = combo % SRC_COUNT;
+            combo /= SRC_COUNT;
             midi_out_ch = combo % 17;
             combo /= 17;
-            live_mode = (combo % 2) != 0;
-            combo /= 2;
             chord_play_mode = combo % MODE_COUNT;
             combo /= MODE_COUNT;
             chord_len_idx = combo % GATE_LEN_COUNT;
-            combo /= GATE_LEN_COUNT;
-            chord_ofs_idx = combo % GATE_OFS_COUNT;
         } else {
-            // Flash was erased / all 1s (0x7FF = 2047) or older preset without extra fields
+            input_source = SRC_MIDI;
             midi_out_ch = 0;
-            live_mode = false;
             chord_play_mode = MODE_CHORD;
             chord_len_idx = 0;
-            chord_ofs_idx = 0;
         }
+        chord_ofs_idx = 0;
+        live_mode = false;
 
         // Default to root note if scale mask is empty on load
         if (scale_mask[0] == 0 && scale_mask[1] == 0 && scale_mask[2] == 0 && scale_mask[3] == 0) {
             for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) scale_mask[i] = 0x0001;
         }
+        seed_mask = (PopCount12(scale_mask[0]) >= 2) ? scale_mask[0] : 0x0091;
         SetMask(scale_mask[0]);
     }
 
@@ -623,7 +1021,7 @@ protected:
         help[HELP_OUT1]     = "Quant";
         help[HELP_OUT2]     = "GateOut";
         help[HELP_EXTRA1]   = "Aux: Page 1/2/3";
-        help[HELP_EXTRA2]   = "P2: Live / P3: Chord";
+        help[HELP_EXTRA2]   = "P2:In/Gen P3:ChdOut";
     }
 
 private:
@@ -634,8 +1032,21 @@ private:
 
     int8_t current_scale = 0;
     int8_t scale_page = 0;
+    uint8_t input_source = SRC_MIDI;
     uint8_t midi_channel = 0; // 0 = Omni, 1..16
     bool live_mode = false;
+
+    // Generative Scale Progression settings
+    uint8_t gen_root = 0;     // 0 = C .. 11 = B
+    uint8_t gen_scale = 1;    // 0 = Maj, 1 = Min, 2 = Dor, 3 = Phr, 4 = Lyd, 5 = HMn
+    uint8_t gen_style = 1;    // 0 = Diatnc, 1 = Lush7, 2 = Cinma, 3 = Jazzy
+    uint8_t gen_drift = 20;   // 0..100% chance per slot per loop
+    uint8_t gen_deg[MS_QUANT_SCALES_COUNT] = {0, 5, 3, 4};
+
+    // Generative Seed Chord settings
+    uint16_t seed_mask = 0x0091;
+    uint8_t  seed_color = 1;  // 0 = Pure, 1 = Rich, 2 = Wild
+    bool     seed_anchor = true; // Keep Slot 1 locked to seed_mask
 
     // MIDI Chord Out settings
     uint8_t midi_out_ch = 0;     // 0 = Off, 1..16
@@ -644,6 +1055,7 @@ private:
     uint8_t chord_play_mode = MODE_CHORD;
     int8_t  chord_octave = 3;    // 3 -> chord root at C3 (MIDI 48)
     int8_t  chord_inversion = 0; // -6..+6
+    int16_t prev_centroid = 60;  // Smooth voice-leading pitch anchor
 
     // MIDI Chord Out runtime state
     uint8_t  chord_notes[MAX_CHORD_NOTES];
@@ -713,8 +1125,14 @@ private:
         gfxBitmap(23, 14, 8, EDIT_ICON);
         gfxPrint(33, 15, scale_page + 1);
 
-        // Rec status
-        if (live_mode) {
+        // Active Input/Source status
+        if (input_source == SRC_OFF) {
+            gfxPrint(43, 15, "OFF");
+        } else if (input_source == SRC_GEN_SCALE) {
+            gfxPrint(43, 15, "GEN");
+        } else if (input_source == SRC_GEN_SEED) {
+            gfxPrint(41, 15, "SEED");
+        } else if (live_mode) {
             gfxPrint(40, 15, "LIVE");
         } else {
             gfxPrint(43, 15, "R");
@@ -726,7 +1144,7 @@ private:
         }
 
         // Blinking indicator in header when MIDI message received
-        if (millis() - midi_activity_timer < 200) {
+        if (input_source == SRC_MIDI && millis() - midi_activity_timer < 200) {
             gfxRect(49, 2, 4, 4);
         }
     }
@@ -748,53 +1166,117 @@ private:
     }
 
     void DrawPage2() {
-        gfxHeader("MultiScale");
+        gfxHeader("Input");
         gfxPrint(58, 2, "2");
 
-        // Row 1: MIDI Channel Setting
-        gfxPrint(1, 15, "MIDI Ch:");
-        gfxStartCursor(44, 15);
-        if (midi_channel == 0) {
-            graphics.print("Omni");
-        } else {
-            graphics.printf("%2d", midi_channel);
-        }
-        gfxEndCursor(cursor == PAGE2_MIDI_CH);
-
-        // Blinking indicator when MIDI message received
-        if (millis() - midi_activity_timer < 200) {
+        if (input_source == SRC_MIDI && millis() - midi_activity_timer < 200) {
             gfxRect(49, 2, 4, 4);
-            gfxRect(58, 16, 4, 4);
         }
 
-        // Row 2: Play scale & Rec scale targets
-        gfxBitmap(1, 26, 8, PLAY_ICON);
-        gfxPrint(10, 27, "Scl");
-        graphics.printf("%d", current_scale + 1);
+        // Row 1: Input Source Selector
+        gfxPrint(1, 14, "Src:");
+        gfxStartCursor(26, 14);
+        graphics.print(SRC_NAME[input_source]);
+        gfxEndCursor(cursor == PAGE2_SRC);
 
-        gfxPrint(32, 27, "Rec:");
-        gfxStartCursor(52, 27);
-        if (live_mode) {
-            graphics.print("LV");
-        } else if (chord_active) {
-            graphics.printf("%d*", rec_scale + 1);
-        } else {
-            graphics.printf("%d", rec_scale + 1);
+        if (input_source == SRC_OFF) {
+            gfxPrint(1, 28, "Manual P1 Edit");
+            gfxStartCursor(10, 48);
+            gfxPrint("[CLR ALL]");
+            gfxEndCursor(cursor == PAGE2_RESET_ALL);
+        } else if (input_source == SRC_MIDI) {
+            // Row 2: MIDI Channel Setting
+            gfxPrint(1, 24, "Ch:");
+            gfxStartCursor(26, 24);
+            if (midi_channel == 0) graphics.print("Omni");
+            else graphics.printf("%2d", midi_channel);
+            gfxEndCursor(cursor == PAGE2_MIDI_CH);
+
+            // Row 3: Play scale & Rec scale targets
+            gfxBitmap(1, 34, 8, PLAY_ICON);
+            gfxPrint(10, 35, "Scl");
+            graphics.printf("%d", current_scale + 1);
+
+            gfxPrint(32, 35, "Rec:");
+            gfxStartCursor(52, 35);
+            if (live_mode) {
+                graphics.print("LV");
+            } else if (chord_active) {
+                graphics.printf("%d*", rec_scale + 1);
+            } else {
+                graphics.printf("%d", rec_scale + 1);
+            }
+            gfxEndCursor(cursor == PAGE2_REC_SCALE);
+
+            // Row 4: Live Mode Toggle
+            gfxPrint(1, 45, "Live:");
+            gfxStartCursor(32, 45);
+            graphics.print(live_mode ? "ON" : "OFF");
+            gfxEndCursor(cursor == PAGE2_LIVE);
+
+            // Row 5: Clear
+            gfxStartCursor(18, 55);
+            gfxPrint("[CLR]");
+            gfxEndCursor(cursor == PAGE2_RESET_ALL);
+        } else if (input_source == SRC_GEN_SCALE) {
+            // Row 2: Root + Scale
+            gfxPrint(1, 24, "Key:");
+            gfxStartCursor(26, 24);
+            graphics.print(NOTE_NAMES[gen_root]);
+            gfxEndCursor(cursor == PAGE2_GEN_ROOT);
+
+            gfxStartCursor(42, 24);
+            graphics.print(GEN_SCALE_NAME[gen_scale]);
+            gfxEndCursor(cursor == PAGE2_GEN_SCALE);
+
+            // Row 3: Style
+            gfxPrint(1, 34, "Sty:");
+            gfxStartCursor(26, 34);
+            graphics.print(GEN_STYLE_NAME[gen_style]);
+            gfxEndCursor(cursor == PAGE2_GEN_STYLE);
+
+            // Row 4: Drift %
+            gfxPrint(1, 44, "Drft:");
+            gfxStartCursor(32, 44);
+            graphics.printf("%3d%%", gen_drift);
+            gfxEndCursor(cursor == PAGE2_GEN_DRIFT);
+
+            // Row 5: Actions [GEN] & [CLR]
+            gfxStartCursor(2, 54);
+            gfxPrint("[GEN]");
+            gfxEndCursor(cursor == PAGE2_GEN_NOW);
+
+            gfxStartCursor(34, 54);
+            gfxPrint("[CLR]");
+            gfxEndCursor(cursor == PAGE2_RESET_ALL);
+        } else { // SRC_GEN_SEED
+            // Row 2: Color / Adventure
+            gfxPrint(1, 24, "Col:");
+            gfxStartCursor(26, 24);
+            graphics.print(SEED_COLOR_NAME[seed_color]);
+            gfxEndCursor(cursor == PAGE2_SEED_COLOR);
+
+            // Row 3: Drift %
+            gfxPrint(1, 34, "Drft:");
+            gfxStartCursor(32, 34);
+            graphics.printf("%3d%%", gen_drift);
+            gfxEndCursor(cursor == PAGE2_GEN_DRIFT);
+
+            // Row 4: Anchor Slot 1
+            gfxPrint(1, 44, "Anc:");
+            gfxStartCursor(26, 44);
+            graphics.print(seed_anchor ? "Slot1" : "Free");
+            gfxEndCursor(cursor == PAGE2_SEED_ANCHOR);
+
+            // Row 5: Actions [GEN] & [SET1]
+            gfxStartCursor(2, 54);
+            gfxPrint("[GEN]");
+            gfxEndCursor(cursor == PAGE2_GEN_NOW);
+
+            gfxStartCursor(34, 54);
+            gfxPrint("[SET1]");
+            gfxEndCursor(cursor == PAGE2_SEED_SET);
         }
-        gfxEndCursor(cursor == PAGE2_REC_SCALE);
-
-        // Row 3: Visualizer for targeted recording scale
-        DrawMiniKeyboard(4, 37, scale_mask[live_mode ? current_scale : rec_scale]);
-
-        // Row 4: Live Mode Toggle & Reset All Scales Button
-        gfxPrint(1, 49, "Live:");
-        gfxStartCursor(26, 49);
-        graphics.print(live_mode ? "ON" : "OFF");
-        gfxEndCursor(cursor == PAGE2_LIVE);
-
-        gfxStartCursor(47, 49);
-        gfxPrint("CLR");
-        gfxEndCursor(cursor == PAGE2_RESET_ALL);
     }
 
     void DrawPage3() {
@@ -802,7 +1284,7 @@ private:
         gfxPrint(58, 2, "3");
 
         // Blinking indicator in header when MIDI message received
-        if (millis() - midi_activity_timer < 200) {
+        if (input_source == SRC_MIDI && millis() - midi_activity_timer < 200) {
             gfxRect(49, 2, 4, 4);
         }
 
@@ -833,9 +1315,10 @@ private:
         gfxEndCursor(cursor == PAGE3_GATE_OFS);
 
         // Row 4: Play mode
+        static constexpr const char* MODE_NAMES[MODE_COUNT] = { "Chord", "Strum", "VL Chd", "VL Str" };
         gfxPrint(1, 45, "Mode:");
-        gfxStartCursor(32, 45);
-        graphics.print(chord_play_mode == MODE_CHORD ? "Chord" : "Strum");
+        gfxStartCursor(28, 45);
+        graphics.print(MODE_NAMES[chord_play_mode % MODE_COUNT]);
         gfxEndCursor(cursor == PAGE3_PLAY_MODE);
 
         // Row 5: Octave + Inversion
@@ -848,33 +1331,5 @@ private:
         gfxStartCursor(42, 55);
         graphics.printf("%+d", chord_inversion);
         gfxEndCursor(cursor == PAGE3_INVERSION);
-    }
-
-    void DrawMiniKeyboard(int x_start, int y_start, uint16_t mask) {
-        gfxFrame(x_start, y_start, 56, 10);
-
-        // White key divider lines
-        for (uint8_t k = 1; k < 7; k++) {
-            gfxLine(x_start + k * 8, y_start, x_start + k * 8, y_start + 9);
-        }
-
-        // Black keys
-        static const uint8_t black_offsets[5] = {6, 14, 30, 38, 46};
-        for (uint8_t b = 0; b < 5; b++) {
-            gfxRect(x_start + black_offsets[b], y_start, 5, 5);
-        }
-
-        // Active note markers
-        static const uint8_t note_x[12] = {2, 7, 10, 15, 18, 26, 31, 34, 39, 42, 47, 50};
-        static const uint8_t is_black[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0};
-        for (uint8_t i = 0; i < 12; i++) {
-            if ((mask >> i) & 0x01) {
-                if (is_black[i]) {
-                    gfxInvert(x_start + note_x[i] - 1, y_start + 1, 3, 3);
-                } else {
-                    gfxInvert(x_start + note_x[i] - 1, y_start + 5, 4, 4);
-                }
-            }
-        }
     }
 };
