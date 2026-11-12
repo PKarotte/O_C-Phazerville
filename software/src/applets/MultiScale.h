@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "ChordonomiconData.h"
+
 #define MS_QUANT_SCALES_COUNT 4
 
 class MultiScale : public HemisphereApplet {
@@ -42,21 +44,23 @@ public:
         PAGE2_GEN_STYLE = 19,
         // -> Gen: Seed mode
         PAGE2_SEED_COLOR = 20,
-        PAGE2_SEED_ANCHOR = 21,
+        PAGE2_SEED_PART = 21,
+        PAGE2_SEED_RARITY = 22,
+        PAGE2_SEED_ANCHOR = 23,
         // -> Shared Gen controls
-        PAGE2_GEN_DRIFT = 22,
-        PAGE2_GEN_NOW = 23,
-        PAGE2_SEED_SET = 24,
+        PAGE2_GEN_DRIFT = 24,
+        PAGE2_GEN_NOW = 25,
+        PAGE2_SEED_SET = 26,
         // -> Shared Clear
-        PAGE2_RESET_ALL = 25,
+        PAGE2_RESET_ALL = 27,
 
         // Page 3: MIDI Chord Out Settings
-        PAGE3_MIDI_OUT_CH = 26,
-        PAGE3_GATE_LEN = 27,
-        PAGE3_GATE_OFS = 28,
-        PAGE3_PLAY_MODE = 29,
-        PAGE3_OCTAVE = 30,
-        PAGE3_INVERSION = 31,
+        PAGE3_MIDI_OUT_CH = 28,
+        PAGE3_GATE_LEN = 29,
+        PAGE3_GATE_OFS = 30,
+        PAGE3_PLAY_MODE = 31,
+        PAGE3_OCTAVE = 32,
+        PAGE3_INVERSION = 33,
 
         CURSOR_LAST = PAGE3_INVERSION
     };
@@ -98,6 +102,9 @@ public:
 
     static constexpr uint8_t SEED_COLOR_COUNT = 3;
     static constexpr const char* SEED_COLOR_NAME[SEED_COLOR_COUNT] = { "Pure", "Rich", "Wild" };
+
+    static constexpr uint8_t SEED_RARITY_COUNT = 4;
+    static constexpr const char* SEED_RARITY_NAME[SEED_RARITY_COUNT] = { "Hits", "Mid", "Deep", "Rare" };
 
     // Gate lengths in 32nds of a bar. 0 = 1/1 = hold for as long as the scale is active
     static constexpr uint8_t GATE_LEN_COUNT = 6;
@@ -517,15 +524,19 @@ public:
         }
     }
 
-    uint8_t PickMusicalVoicing(bool is_minor, bool is_dominant_pos, uint8_t color) const {
-        if (color == 0) { // Pure: clean triads & occasional sus
+    uint8_t PickMusicalVoicing(bool is_minor, uint8_t hint_q, bool is_dominant_pos, uint8_t color) const {
+        if (color == 0) { // Pure: clean triads & occasional sus4 on dominant
             if (is_minor) return SCQ_MIN;
-            if (is_dominant_pos && random(100) < 25) return SCQ_SUS4;
+            if (hint_q == SCQ_SUS4 || (is_dominant_pos && random(100) < 25)) return SCQ_SUS4;
             return SCQ_MAJ;
+        }
+        // Rich / Wild: blend Chordonomicon's empirical quality with lush 7th/9th voicings
+        if (hint_q >= SCQ_MAJ7 && hint_q <= SCQ_MAJ6 && hint_q != 7 && random(100) < 55) {
+            return hint_q;
         }
         uint8_t roll = random(100);
         if (is_minor) {
-            if (color == 1) { // Rich: min7, min, min(add9)
+            if (color == 1) { // Rich: min7, min(add9), min
                 return (roll < 55) ? SCQ_MIN7 : (roll < 80) ? SCQ_MIN_ADD9 : SCQ_MIN;
             } else { // Wild: min7, min(add9), sus2
                 return (roll < 45) ? SCQ_MIN7 : (roll < 80) ? SCQ_MIN_ADD9 : SCQ_SUS2;
@@ -544,101 +555,85 @@ public:
         }
     }
 
-    uint16_t PickNextScalerChord(uint16_t prev_mask, uint8_t color, uint16_t avoid_mask = 0) const {
+    uint16_t PickNextScalerChord(uint16_t prev_mask, uint8_t color, uint8_t rarity, uint16_t avoid_mask = 0) const {
         uint8_t prev_root = 0;
         bool prev_minor = false;
         DetectChord(prev_mask, prev_root, prev_minor);
 
-        struct ChordStep { uint8_t offset; bool is_minor; bool dom; };
-        // Scaler-style curated chord-to-chord harmonic transitions
-        static constexpr ChordStep from_maj[10] = {
-            {7, false, true},   // -> V
-            {5, false, false},  // -> IV
-            {9, true,  false},  // -> vi
-            {2, true,  false},  // -> ii
-            {4, true,  false},  // -> iii
-            {10, false, false}, // -> bVII (Mixolydian)
-            {8, false, false},  // -> bVI (Modal interchange)
-            {5, true,  false},  // -> iv (Borrowed minor subdominant)
-            {3, false, false},  // -> bIII (Chromatic mediant)
-            {0, false, false}   // -> I (Resolve)
-        };
-        static constexpr ChordStep from_min[10] = {
-            {5, true,  false},  // -> iv
-            {10, false, false}, // -> bVII
-            {8, false, false},  // -> bVI
-            {3, false, false},  // -> bIII
-            {7, true,  false},  // -> v
-            {7, false, true},   // -> V (Harmonic minor dominant)
-            {5, false, false},  // -> IV (Dorian)
-            {2, true,  false},  // -> ii
-            {1, false, false},  // -> bII (Phrygian/Neapolitan)
-            {0, true,  false}   // -> i (Resolve)
-        };
+        // Slice into Chordonomicon's 16 ranked chord-to-chord transitions by rarity
+        static constexpr uint8_t min_idx_tbl[4] = { 0, 2, 5, 7 };
+        static constexpr uint8_t max_idx_tbl[4] = { 6, 10, 13, 16 };
+        uint8_t r_idx = (rarity < SEED_RARITY_COUNT) ? rarity : 0;
+        uint8_t lo = min_idx_tbl[r_idx];
+        uint8_t hi = max_idx_tbl[r_idx];
 
-        uint8_t pool_size = (color == 0) ? 5 : (color == 1) ? 7 : 9;
         for (uint8_t attempt = 0; attempt < 6; attempt++) {
-            const ChordStep& step = prev_minor
-                ? from_min[random(pool_size)]
-                : from_maj[random(pool_size)];
+            uint8_t pick = lo + random(hi - lo);
+            const CdChord& step = prev_minor ? CD_TRANS_FROM_MIN[pick] : CD_TRANS_FROM_MAJ[pick];
             uint8_t next_root = (prev_root + step.offset) % 12;
-            uint8_t q = PickMusicalVoicing(step.is_minor, step.dom, color);
+            bool is_dom = (step.offset == 7 && !step.is_minor);
+            uint8_t q = PickMusicalVoicing(step.is_minor != 0, step.hint_q, is_dom, color);
             uint16_t cand = BuildSeedChordMask(next_root, q);
             if (cand != prev_mask && cand != avoid_mask) return cand;
         }
-        const ChordStep& fallback = prev_minor ? from_min[0] : from_maj[0];
+        const CdChord& fallback = prev_minor ? CD_TRANS_FROM_MIN[lo] : CD_TRANS_FROM_MAJ[lo];
+        bool is_dom = (fallback.offset == 7 && !fallback.is_minor);
         return BuildSeedChordMask((prev_root + fallback.offset) % 12,
-                                  PickMusicalVoicing(fallback.is_minor, fallback.dom, color));
+                                  PickMusicalVoicing(fallback.is_minor != 0, fallback.hint_q, is_dom, color));
+    }
+
+    void SwitchSeedPart(uint8_t new_part) {
+        new_part = new_part ? 1 : 0;
+        if (new_part == seed_part) return;
+        // Save any manual edits / drift on current part before switching
+        uint16_t* cur_buf = (seed_part == 0) ? part_a_masks : part_b_masks;
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            cur_buf[i] = scale_mask[i];
+        }
+        seed_part = new_part;
+        const uint16_t* next_buf = (seed_part == 0) ? part_a_masks : part_b_masks;
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            scale_mask[i] = next_buf[i];
+        }
+        SetMask(scale_mask[current_scale]);
+        if (chord_gate_active) RefreshActiveChord();
+        PublishSync(false);
     }
 
     void GenerateSeedChain() {
         if (PopCount12(seed_mask) < 2) {
             seed_mask = (PopCount12(scale_mask[0]) >= 2) ? scale_mask[0] : 0x0091;
         }
-        scale_mask[0] = seed_mask;
 
         uint8_t root = 0;
         bool is_minor = false;
         DetectChord(seed_mask, root, is_minor);
 
-        struct ProgStep { uint8_t offset; bool is_minor; bool dom; };
-        // Curated 4-chord progression database (steps 2, 3, 4 relative to Slot 1 root)
-        static constexpr ProgStep maj_progs[12][3] = {
-            {{7, false, true},  {9, true,  false}, {5, false, false}}, // I - V - vi - IV
-            {{9, true,  false}, {5, false, false}, {7, false, true}},  // I - vi - IV - V
-            {{5, false, false}, {9, true,  false}, {7, false, true}},  // I - IV - vi - V
-            {{4, true,  false}, {9, true,  false}, {5, false, false}}, // I - iii - vi - IV
-            {{4, true,  false}, {5, false, false}, {7, false, true}},  // I - iii - IV - V
-            {{5, false, false}, {2, true,  false}, {7, false, true}},  // I - IV - ii - V
-            {{7, false, true},  {9, true,  false}, {4, true,  false}}, // I - V - vi - iii
-            {{2, true,  false}, {4, true,  false}, {5, false, false}}, // I - ii - iii - IV
-            {{10, false, false},{5, false, false}, {0, false, false}}, // I - bVII - IV - I
-            {{5, false, false}, {5, true,  false}, {0, false, false}}, // I - IV - iv - I
-            {{8, false, false}, {10, false, false},{0, false, false}}, // I - bVI - bVII - I
-            {{4, true,  false}, {8, false, false}, {10, false, false}} // I - iii - bVI - bVII
-        };
-        static constexpr ProgStep min_progs[12][3] = {
-            {{8, false, false}, {3, false, false}, {10, false, false}}, // i - bVI - bIII - bVII
-            {{10, false, false},{8, false, false}, {10, false, false}}, // i - bVII - bVI - bVII
-            {{5, true,  false}, {10, false, false},{3, false, false}},  // i - iv - bVII - bIII
-            {{3, false, false}, {10, false, false},{5, true,  false}},  // i - bIII - bVII - iv
-            {{5, true,  false}, {7, true,  false}, {0, true,  false}},  // i - iv - v - i
-            {{5, true,  false}, {7, false, true},  {0, true,  false}},  // i - iv - V - i
-            {{8, false, false}, {5, true,  false}, {7, false, true}},   // i - bVI - iv - V
-            {{5, false, false}, {10, false, false},{0, true,  false}},  // i - IV - bVII - i (Dorian)
-            {{10, false, false},{5, true,  false}, {0, true,  false}},  // i - bVII - iv - i
-            {{3, false, false}, {8, false, false}, {10, false, false}}, // i - bIII - bVI - bVII
-            {{7, true,  false}, {8, false, false}, {10, false, false}}, // i - v - bVI - bVII
-            {{8, false, false}, {10, false, false},{5, true,  false}}   // i - bVI - bVII - iv
-        };
-
-        uint8_t max_prog = (seed_color == 0) ? 8 : (seed_color == 1) ? 10 : 12;
-        uint8_t p_idx = random(max_prog);
-        for (uint8_t i = 0; i < 3; i++) {
-            const ProgStep& st = is_minor ? min_progs[p_idx][i] : maj_progs[p_idx][i];
+        uint8_t r_idx = (seed_rarity < SEED_RARITY_COUNT) ? seed_rarity : 0;
+        // Part A: 64 progressions split into 4 rarity tiers of 16
+        uint8_t idx_a = r_idx * 16 + random(16);
+        part_a_masks[0] = seed_mask;
+        for (uint8_t i = 1; i < MS_QUANT_SCALES_COUNT; i++) {
+            const CdChord& st = is_minor ? CD_MIN_PART_A[idx_a][i] : CD_MAJ_PART_A[idx_a][i];
             uint8_t chord_root = (root + st.offset) % 12;
-            uint8_t q = PickMusicalVoicing(st.is_minor, st.dom, seed_color);
-            scale_mask[i + 1] = BuildSeedChordMask(chord_root, q);
+            bool is_dom = (st.offset == 7 && !st.is_minor);
+            uint8_t q = PickMusicalVoicing(st.is_minor != 0, st.hint_q, is_dom, seed_color);
+            part_a_masks[i] = BuildSeedChordMask(chord_root, q);
+        }
+
+        // Part B: 48 contrasting Chorus/Bridge progressions split into 4 tiers of 12
+        uint8_t idx_b = r_idx * 12 + random(12);
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            const CdChord& st = is_minor ? CD_MIN_PART_B[idx_b][i] : CD_MAJ_PART_B[idx_b][i];
+            uint8_t chord_root = (root + st.offset) % 12;
+            bool is_dom = (st.offset == 7 && !st.is_minor);
+            uint8_t q = PickMusicalVoicing(st.is_minor != 0, st.hint_q, is_dom, seed_color);
+            part_b_masks[i] = BuildSeedChordMask(chord_root, q);
+        }
+
+        const uint16_t* active_buf = (seed_part == 0) ? part_a_masks : part_b_masks;
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            scale_mask[i] = active_buf[i];
         }
 
         SetMask(scale_mask[current_scale]);
@@ -648,15 +643,19 @@ public:
 
     void EvolveSeedProgression() {
         for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
-            if (i == 0 && seed_anchor) {
+            if (i == 0 && seed_anchor && seed_part == 0) {
                 scale_mask[0] = seed_mask;
                 continue;
             }
             if (random(100) < gen_drift) {
                 uint8_t prev_idx = (i + MS_QUANT_SCALES_COUNT - 1) % MS_QUANT_SCALES_COUNT;
                 uint8_t next_idx = (i + 1) % MS_QUANT_SCALES_COUNT;
-                scale_mask[i] = PickNextScalerChord(scale_mask[prev_idx], seed_color, scale_mask[next_idx]);
+                scale_mask[i] = PickNextScalerChord(scale_mask[prev_idx], seed_color, seed_rarity, scale_mask[next_idx]);
             }
+        }
+        uint16_t* active_buf = (seed_part == 0) ? part_a_masks : part_b_masks;
+        for (uint8_t i = 0; i < MS_QUANT_SCALES_COUNT; i++) {
+            active_buf[i] = scale_mask[i];
         }
     }
 
@@ -936,7 +935,8 @@ public:
                 return (c == PAGE2_GEN_ROOT || c == PAGE2_GEN_SCALE || c == PAGE2_GEN_STYLE ||
                         c == PAGE2_GEN_DRIFT || c == PAGE2_GEN_NOW || c == PAGE2_RESET_ALL);
             case SRC_GEN_SEED:
-                return (c == PAGE2_SEED_COLOR || c == PAGE2_GEN_DRIFT || c == PAGE2_SEED_ANCHOR ||
+                return (c == PAGE2_SEED_COLOR || c == PAGE2_SEED_PART || c == PAGE2_SEED_RARITY ||
+                        c == PAGE2_GEN_DRIFT || c == PAGE2_SEED_ANCHOR ||
                         c == PAGE2_GEN_NOW || c == PAGE2_SEED_SET);
             case SRC_SYNC:
                 return false; // Only PAGE2_SRC is needed on Page 2
@@ -963,6 +963,8 @@ public:
         } else if (cursor == PAGE2_LIVE) {
             live_mode = !live_mode;
             if (live_mode) SetMask(scale_mask[current_scale]);
+        } else if (cursor == PAGE2_SEED_PART) {
+            SwitchSeedPart(1 - seed_part);
         } else if (cursor == PAGE2_SEED_ANCHOR) {
             seed_anchor = !seed_anchor;
         } else if (cursor == PAGE2_GEN_NOW) {
@@ -1048,6 +1050,13 @@ public:
                 break;
             case PAGE2_SEED_COLOR:
                 seed_color = constrain(seed_color + direction, 0, SEED_COLOR_COUNT - 1);
+                GenerateSeedChain();
+                break;
+            case PAGE2_SEED_PART:
+                SwitchSeedPart(constrain((int)seed_part + direction, 0, 1));
+                break;
+            case PAGE2_SEED_RARITY:
+                seed_rarity = constrain(seed_rarity + direction, 0, SEED_RARITY_COUNT - 1);
                 GenerateSeedChain();
                 break;
             case PAGE2_SEED_ANCHOR:
@@ -1197,7 +1206,11 @@ private:
     // Generative Seed Chord settings
     uint16_t seed_mask = 0x0091;
     uint8_t  seed_color = 1;  // 0 = Pure, 1 = Rich, 2 = Wild
+    uint8_t  seed_rarity = 0; // 0 = Hits, 1 = Mid, 2 = Deep, 3 = Rare
+    uint8_t  seed_part = 0;   // 0 = Part A, 1 = Part B
     bool     seed_anchor = true; // Keep Slot 1 locked to seed_mask
+    uint16_t part_a_masks[MS_QUANT_SCALES_COUNT] = {0x0091, 0x0884, 0x0A11, 0x0221};
+    uint16_t part_b_masks[MS_QUANT_SCALES_COUNT] = {0x0221, 0x0091, 0x0884, 0x0091};
 
     // MIDI Chord Out settings
     uint8_t midi_out_ch = 0;     // 0 = Off, 1..16
@@ -1411,22 +1424,30 @@ private:
             gfxPrint("[CLR]");
             gfxEndCursor(cursor == PAGE2_RESET_ALL);
         } else if (input_source == SRC_GEN_SEED) {
-            // Row 2: Color / Adventure
-            gfxPrint(1, 24, "Col:");
-            gfxStartCursor(26, 24);
+            // Row 2: Color + Part A/B
+            gfxStartCursor(1, 24);
             graphics.print(SEED_COLOR_NAME[seed_color]);
             gfxEndCursor(cursor == PAGE2_SEED_COLOR);
 
-            // Row 3: Drift %
-            gfxPrint(1, 34, "Drft:");
-            gfxStartCursor(32, 34);
+            gfxPrint(31, 24, "Pt:");
+            gfxStartCursor(49, 24);
+            graphics.print(seed_part == 0 ? "A" : "B");
+            gfxEndCursor(cursor == PAGE2_SEED_PART);
+
+            // Row 3: Rarity (Hits / Mid / Deep / Rare)
+            gfxPrint(1, 34, "Rar:");
+            gfxStartCursor(26, 34);
+            graphics.print(SEED_RARITY_NAME[seed_rarity]);
+            gfxEndCursor(cursor == PAGE2_SEED_RARITY);
+
+            // Row 4: Drift % + Anchor Slot 1
+            gfxPrint(1, 44, "Dr:");
+            gfxStartCursor(19, 44);
             graphics.printf("%3d%%", gen_drift);
             gfxEndCursor(cursor == PAGE2_GEN_DRIFT);
 
-            // Row 4: Anchor Slot 1
-            gfxPrint(1, 44, "Anc:");
-            gfxStartCursor(26, 44);
-            graphics.print(seed_anchor ? "Slot1" : "Free");
+            gfxStartCursor(47, 44);
+            graphics.print(seed_anchor ? "S1" : "Fr");
             gfxEndCursor(cursor == PAGE2_SEED_ANCHOR);
 
             // Row 5: Actions [GEN] & [SET1]
