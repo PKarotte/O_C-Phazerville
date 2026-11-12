@@ -79,6 +79,7 @@ using namespace HS;
 #include "MiniArp.h"
 #ifdef __IMXRT1062__
 #include "MidiCapture.h"
+// #include "MidiLoop.h"
 #endif
 #include "MultiScale.h"
 #include "Palimpsest.h"
@@ -189,6 +190,7 @@ constexpr Registry reg = Registry<HemisphereApplet, HS::APPLET_SLOTS  // unused 
     , DeclareApplet<MarkovPerc, 94, CAT_OTHER>
     , DeclareApplet<Metronome, 50, CAT_CLOCKING>
     , DeclareApplet<MidiCapture, 81, CAT_MIDI>
+    // , DeclareApplet<MidiLoop, 81, CAT_MIDI> // Legacy MidiLoop (superseded by MidiCapture)
     //, DeclareApplet<MiniArp, 97, CAT_SEQUENCER | CAT_QUANTIZER>
     , DeclareApplet<hMIDIIn, 150, CAT_MIDI>
     , DeclareApplet<hMIDIOut, 27, CAT_MIDI>
