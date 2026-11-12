@@ -431,111 +431,164 @@ public:
         }
     }
 
-    static bool HasChromaticCluster(uint16_t mask) {
-        for (uint8_t s = 0; s < 12; s++) {
-            uint8_t s1 = (s + 1) % 12;
-            uint8_t s2 = (s + 2) % 12;
-            if (((mask >> s) & 1) && ((mask >> s1) & 1) && ((mask >> s2) & 1)) {
-                return true;
-            }
+    enum SeedChordQuality : uint8_t {
+        SCQ_MAJ = 0,
+        SCQ_MIN,
+        SCQ_MAJ7,
+        SCQ_MIN7,
+        SCQ_DOM7,
+        SCQ_SUS4,
+        SCQ_SUS2,
+        SCQ_ADD9,
+        SCQ_MIN_ADD9,
+        SCQ_MAJ6
+    };
+
+    static uint16_t BuildSeedChordMask(uint8_t root, uint8_t quality) {
+        static constexpr uint16_t templates[10] = {
+            (1 << 0) | (1 << 4) | (1 << 7),              // MAJ
+            (1 << 0) | (1 << 3) | (1 << 7),              // MIN
+            (1 << 0) | (1 << 4) | (1 << 7) | (1 << 11),  // MAJ7
+            (1 << 0) | (1 << 3) | (1 << 7) | (1 << 10),  // MIN7
+            (1 << 0) | (1 << 4) | (1 << 7) | (1 << 10),  // DOM7
+            (1 << 0) | (1 << 5) | (1 << 7),              // SUS4
+            (1 << 0) | (1 << 2) | (1 << 7),              // SUS2
+            (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7),   // ADD9
+            (1 << 0) | (1 << 2) | (1 << 3) | (1 << 7),   // MIN_ADD9
+            (1 << 0) | (1 << 4) | (1 << 7) | (1 << 9)    // MAJ6
+        };
+        uint16_t base = templates[quality % 10];
+        uint16_t out = 0;
+        uint8_t r = root % 12;
+        for (uint8_t i = 0; i < 12; i++) {
+            if ((base >> i) & 1) out |= (1 << ((i + r) % 12));
         }
-        return false;
+        return out;
     }
 
-    int ScoreChordMask(uint16_t mask, uint8_t color) const {
-        uint8_t tones[12];
-        uint8_t n = 0;
-        for (uint8_t s = 0; s < 12; s++) {
-            if ((mask >> s) & 1) tones[n++] = s;
+    static void DetectChord(uint16_t mask, uint8_t& out_root, bool& out_is_minor) {
+        if (mask == 0) {
+            out_root = 0;
+            out_is_minor = false;
+            return;
         }
-        if (n < 3 || n > 4 || HasChromaticCluster(mask)) return -999;
-
-        int score = 0;
-        uint8_t semitone_pairs = 0;
-        for (uint8_t i = 0; i < n; i++) {
-            for (uint8_t j = i + 1; j < n; j++) {
-                uint8_t d = tones[j] - tones[i];
-                if (d > 6) d = 12 - d;
-                switch (d) {
-                    case 1:
-                        semitone_pairs++;
-                        if (color == 0) score -= 12;      // Pure: avoid minor 2nd/maj7
-                        else if (color == 1) score += (semitone_pairs == 1 ? 2 : -8); // Rich: allow 1 maj7
-                        break;
-                    case 2: score += 3; break;            // sus2 / add9
-                    case 3:
-                    case 4: score += 5; break;            // maj/min 3rds
-                    case 5: score += 6; break;            // 4th / 5th
-                    case 6: score += (color == 0 ? -4 : 1); break; // tritone
-                }
-            }
-        }
-        return score;
-    }
-
-    uint16_t MutateChordMask(uint16_t mask, uint8_t color) const {
-        if (PopCount12(mask) < 3) {
-            // Ensure at least a valid triad
-            uint8_t root = 0;
-            for (uint8_t s = 0; s < 12; s++) if ((mask >> s) & 1) { root = s; break; }
-            mask = (1 << root) | (1 << ((root + 4) % 12)) | (1 << ((root + 7) % 12));
-        }
-
-        uint16_t cands[48];
-        int scores[48];
-        int cand_count = 0;
-        int best_score = -999;
-
-        uint8_t tones[12];
-        uint8_t n = 0;
-        for (uint8_t s = 0; s < 12; s++) if ((mask >> s) & 1) tones[n++] = s;
-
-        auto push_cand = [&](uint16_t c) {
-            if (c == mask || cand_count >= 48) return;
-            int sc = ScoreChordMask(c, color);
-            if (sc > -500) {
-                cands[cand_count] = c;
-                scores[cand_count] = sc;
-                if (sc > best_score) best_score = sc;
-                cand_count++;
-            }
+        // Core recognition templates: {bitmask, is_minor}
+        static constexpr uint16_t rec_masks[8] = {
+            (1 << 0) | (1 << 4) | (1 << 7),              // Maj
+            (1 << 0) | (1 << 3) | (1 << 7),              // Min
+            (1 << 0) | (1 << 4) | (1 << 7) | (1 << 11),  // Maj7
+            (1 << 0) | (1 << 3) | (1 << 7) | (1 << 10),  // Min7
+            (1 << 0) | (1 << 4) | (1 << 7) | (1 << 10),  // Dom7
+            (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7),   // Add9
+            (1 << 0) | (1 << 5) | (1 << 7),              // Sus4
+            (1 << 0) | (1 << 2) | (1 << 7)               // Sus2
+        };
+        static constexpr bool rec_minor[8] = {
+            false, true, false, true, false, false, false, false
         };
 
-        // 1. Parsimonious 1-note shifts (+-1 or +-2 semitones)
-        static constexpr int8_t shifts[4] = {-2, -1, 1, 2};
-        for (uint8_t i = 0; i < n; i++) {
-            uint16_t base_without = mask & ~(1 << tones[i]);
-            for (int k = 0; k < 4; k++) {
-                uint8_t nt = (tones[i] + 12 + shifts[k]) % 12;
-                if (!((base_without >> nt) & 1)) {
-                    push_cand(base_without | (1 << nt));
+        uint8_t lowest_pc = 0;
+        for (uint8_t s = 0; s < 12; s++) {
+            if ((mask >> s) & 1) { lowest_pc = s; break; }
+        }
+
+        int best_score = -999;
+        out_root = lowest_pc;
+        out_is_minor = false;
+
+        for (uint8_t r = 0; r < 12; r++) {
+            // Rotate mask down by r so candidate root is at bit 0
+            uint16_t rot = ((mask >> r) | (mask << (12 - r))) & 0x0FFF;
+            if (!(rot & 1)) continue; // Root must be present in seed chord
+
+            for (uint8_t t = 0; t < 8; t++) {
+                uint16_t tmpl = rec_masks[t];
+                uint8_t matched = PopCount12(rot & tmpl);
+                uint8_t extra = PopCount12(rot & ~tmpl);
+                uint8_t missing = PopCount12(tmpl & ~rot);
+                int sc = (int)matched * 4 - (int)extra * 3 - (int)missing;
+                if (r == lowest_pc) sc += 1; // Prefer root-position bass
+                if (sc > best_score) {
+                    best_score = sc;
+                    out_root = r;
+                    out_is_minor = rec_minor[t];
                 }
             }
         }
+    }
 
-        // 2. Add or drop 4th color tone when Rich/Wild
-        if (color >= 1 && n == 3) {
-            for (uint8_t s = 0; s < 12; s++) {
-                if (!((mask >> s) & 1)) push_cand(mask | (1 << s));
+    uint8_t PickMusicalVoicing(bool is_minor, bool is_dominant_pos, uint8_t color) const {
+        if (color == 0) { // Pure: clean triads & occasional sus
+            if (is_minor) return SCQ_MIN;
+            if (is_dominant_pos && random(100) < 25) return SCQ_SUS4;
+            return SCQ_MAJ;
+        }
+        uint8_t roll = random(100);
+        if (is_minor) {
+            if (color == 1) { // Rich: min7, min, min(add9)
+                return (roll < 55) ? SCQ_MIN7 : (roll < 80) ? SCQ_MIN_ADD9 : SCQ_MIN;
+            } else { // Wild: min7, min(add9), sus2
+                return (roll < 45) ? SCQ_MIN7 : (roll < 80) ? SCQ_MIN_ADD9 : SCQ_SUS2;
             }
-        } else if (n == 4) {
-            for (uint8_t i = 0; i < n; i++) {
-                push_cand(mask & ~(1 << tones[i]));
+        } else {
+            if (is_dominant_pos) {
+                if (roll < 50) return SCQ_DOM7;
+                if (roll < 75) return SCQ_SUS4;
+                return (color == 2) ? SCQ_ADD9 : SCQ_MAJ;
+            }
+            if (color == 1) { // Rich: maj7, add9, maj6, maj
+                return (roll < 40) ? SCQ_MAJ7 : (roll < 70) ? SCQ_ADD9 : (roll < 85) ? SCQ_MAJ6 : SCQ_MAJ;
+            } else { // Wild: maj7, add9, sus2, maj6
+                return (roll < 35) ? SCQ_MAJ7 : (roll < 65) ? SCQ_ADD9 : (roll < 85) ? SCQ_SUS2 : SCQ_MAJ6;
             }
         }
+    }
 
-        if (cand_count == 0) return mask;
+    uint16_t PickNextScalerChord(uint16_t prev_mask, uint8_t color, uint16_t avoid_mask = 0) const {
+        uint8_t prev_root = 0;
+        bool prev_minor = false;
+        DetectChord(prev_mask, prev_root, prev_minor);
 
-        // Pick randomly among candidates within 3 points of best_score
-        uint16_t top[48];
-        int top_count = 0;
-        int threshold = best_score - (color == 2 ? 5 : 3);
-        for (int i = 0; i < cand_count; i++) {
-            if (scores[i] >= threshold) {
-                top[top_count++] = cands[i];
-            }
+        struct ChordStep { uint8_t offset; bool is_minor; bool dom; };
+        // Scaler-style curated chord-to-chord harmonic transitions
+        static constexpr ChordStep from_maj[10] = {
+            {7, false, true},   // -> V
+            {5, false, false},  // -> IV
+            {9, true,  false},  // -> vi
+            {2, true,  false},  // -> ii
+            {4, true,  false},  // -> iii
+            {10, false, false}, // -> bVII (Mixolydian)
+            {8, false, false},  // -> bVI (Modal interchange)
+            {5, true,  false},  // -> iv (Borrowed minor subdominant)
+            {3, false, false},  // -> bIII (Chromatic mediant)
+            {0, false, false}   // -> I (Resolve)
+        };
+        static constexpr ChordStep from_min[10] = {
+            {5, true,  false},  // -> iv
+            {10, false, false}, // -> bVII
+            {8, false, false},  // -> bVI
+            {3, false, false},  // -> bIII
+            {7, true,  false},  // -> v
+            {7, false, true},   // -> V (Harmonic minor dominant)
+            {5, false, false},  // -> IV (Dorian)
+            {2, true,  false},  // -> ii
+            {1, false, false},  // -> bII (Phrygian/Neapolitan)
+            {0, true,  false}   // -> i (Resolve)
+        };
+
+        uint8_t pool_size = (color == 0) ? 5 : (color == 1) ? 7 : 9;
+        for (uint8_t attempt = 0; attempt < 6; attempt++) {
+            const ChordStep& step = prev_minor
+                ? from_min[random(pool_size)]
+                : from_maj[random(pool_size)];
+            uint8_t next_root = (prev_root + step.offset) % 12;
+            uint8_t q = PickMusicalVoicing(step.is_minor, step.dom, color);
+            uint16_t cand = BuildSeedChordMask(next_root, q);
+            if (cand != prev_mask && cand != avoid_mask) return cand;
         }
-        return top[random(top_count)];
+        const ChordStep& fallback = prev_minor ? from_min[0] : from_maj[0];
+        return BuildSeedChordMask((prev_root + fallback.offset) % 12,
+                                  PickMusicalVoicing(fallback.is_minor, fallback.dom, color));
     }
 
     void GenerateSeedChain() {
@@ -543,9 +596,51 @@ public:
             seed_mask = (PopCount12(scale_mask[0]) >= 2) ? scale_mask[0] : 0x0091;
         }
         scale_mask[0] = seed_mask;
-        for (uint8_t i = 1; i < MS_QUANT_SCALES_COUNT; i++) {
-            scale_mask[i] = MutateChordMask(scale_mask[i - 1], seed_color);
+
+        uint8_t root = 0;
+        bool is_minor = false;
+        DetectChord(seed_mask, root, is_minor);
+
+        struct ProgStep { uint8_t offset; bool is_minor; bool dom; };
+        // Curated 4-chord progression database (steps 2, 3, 4 relative to Slot 1 root)
+        static constexpr ProgStep maj_progs[12][3] = {
+            {{7, false, true},  {9, true,  false}, {5, false, false}}, // I - V - vi - IV
+            {{9, true,  false}, {5, false, false}, {7, false, true}},  // I - vi - IV - V
+            {{5, false, false}, {9, true,  false}, {7, false, true}},  // I - IV - vi - V
+            {{4, true,  false}, {9, true,  false}, {5, false, false}}, // I - iii - vi - IV
+            {{4, true,  false}, {5, false, false}, {7, false, true}},  // I - iii - IV - V
+            {{5, false, false}, {2, true,  false}, {7, false, true}},  // I - IV - ii - V
+            {{7, false, true},  {9, true,  false}, {4, true,  false}}, // I - V - vi - iii
+            {{2, true,  false}, {4, true,  false}, {5, false, false}}, // I - ii - iii - IV
+            {{10, false, false},{5, false, false}, {0, false, false}}, // I - bVII - IV - I
+            {{5, false, false}, {5, true,  false}, {0, false, false}}, // I - IV - iv - I
+            {{8, false, false}, {10, false, false},{0, false, false}}, // I - bVI - bVII - I
+            {{4, true,  false}, {8, false, false}, {10, false, false}} // I - iii - bVI - bVII
+        };
+        static constexpr ProgStep min_progs[12][3] = {
+            {{8, false, false}, {3, false, false}, {10, false, false}}, // i - bVI - bIII - bVII
+            {{10, false, false},{8, false, false}, {10, false, false}}, // i - bVII - bVI - bVII
+            {{5, true,  false}, {10, false, false},{3, false, false}},  // i - iv - bVII - bIII
+            {{3, false, false}, {10, false, false},{5, true,  false}},  // i - bIII - bVII - iv
+            {{5, true,  false}, {7, true,  false}, {0, true,  false}},  // i - iv - v - i
+            {{5, true,  false}, {7, false, true},  {0, true,  false}},  // i - iv - V - i
+            {{8, false, false}, {5, true,  false}, {7, false, true}},   // i - bVI - iv - V
+            {{5, false, false}, {10, false, false},{0, true,  false}},  // i - IV - bVII - i (Dorian)
+            {{10, false, false},{5, true,  false}, {0, true,  false}},  // i - bVII - iv - i
+            {{3, false, false}, {8, false, false}, {10, false, false}}, // i - bIII - bVI - bVII
+            {{7, true,  false}, {8, false, false}, {10, false, false}}, // i - v - bVI - bVII
+            {{8, false, false}, {10, false, false},{5, true,  false}}   // i - bVI - bVII - iv
+        };
+
+        uint8_t max_prog = (seed_color == 0) ? 8 : (seed_color == 1) ? 10 : 12;
+        uint8_t p_idx = random(max_prog);
+        for (uint8_t i = 0; i < 3; i++) {
+            const ProgStep& st = is_minor ? min_progs[p_idx][i] : maj_progs[p_idx][i];
+            uint8_t chord_root = (root + st.offset) % 12;
+            uint8_t q = PickMusicalVoicing(st.is_minor, st.dom, seed_color);
+            scale_mask[i + 1] = BuildSeedChordMask(chord_root, q);
         }
+
         SetMask(scale_mask[current_scale]);
         if (chord_gate_active) RefreshActiveChord();
         PublishSync(false);
@@ -558,11 +653,9 @@ public:
                 continue;
             }
             if (random(100) < gen_drift) {
-                uint16_t ref = (i == 0) ? scale_mask[0] : scale_mask[i - 1];
-                scale_mask[i] = MutateChordMask(scale_mask[i], seed_color);
-                if (scale_mask[i] == ref) {
-                    scale_mask[i] = MutateChordMask(ref, seed_color);
-                }
+                uint8_t prev_idx = (i + MS_QUANT_SCALES_COUNT - 1) % MS_QUANT_SCALES_COUNT;
+                uint8_t next_idx = (i + 1) % MS_QUANT_SCALES_COUNT;
+                scale_mask[i] = PickNextScalerChord(scale_mask[prev_idx], seed_color, scale_mask[next_idx]);
             }
         }
     }
